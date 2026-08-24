@@ -1,0 +1,4 @@
+# Compile .tsx at runtime (the @opentui/solid JSX transform) so bun test
+# can run the host-replica layout test in test/slot-layout.test.tsx.
+[test]
+preload = ["./node_modules/@opentui/solid/scripts/preload.js"]

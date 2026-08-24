@@ -44,7 +44,9 @@ export type BarLayout =
  * (the space inside the card's border and padding).
  *
  * - `contentWidth <= 0` / non-finite means "not measured yet" → the
- *   pre-measurement default, rendered inline.
+ *   pre-measurement default, rendered STACKED: an inline guess could be
+ *   too wide for a narrow slot and wrap the label awkwardly, while a
+ *   stacked bar at the default width never collides with the label.
  * - Inline when the bar keeps at least MIN_BAR_WIDTH cells beside the
  *   label and the 1-cell gap; the bar soaks up all remaining width,
  *   capped at MAX_BAR_WIDTH.
@@ -53,7 +55,7 @@ export type BarLayout =
  */
 export function layoutBar(contentWidth: number, pctLabel: string): BarLayout {
   const w = Math.floor(contentWidth)
-  if (!Number.isFinite(w) || w <= 0) return { mode: "inline", barWidth: DEFAULT_BAR_WIDTH }
+  if (!Number.isFinite(w) || w <= 0) return { mode: "stacked", barWidth: DEFAULT_BAR_WIDTH }
   const inline = w - pctLabel.length - 1 // 1 = flex row gap
   if (inline >= MIN_BAR_WIDTH) return { mode: "inline", barWidth: Math.min(inline, MAX_BAR_WIDTH) }
   return { mode: "stacked", barWidth: Math.min(Math.max(w, 1), MAX_BAR_WIDTH) }

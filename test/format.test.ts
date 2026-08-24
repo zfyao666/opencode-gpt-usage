@@ -52,9 +52,9 @@ describe("formatBar", () => {
 })
 
 describe("layoutBar", () => {
-  test("unmeasured width (0, negative, NaN) → pre-measurement default, inline", () => {
+  test("unmeasured width (0, negative, NaN) → pre-measurement default, stacked (never wraps the label)", () => {
     for (const w of [0, -5, NaN, Infinity, -Infinity]) {
-      expect(layoutBar(w, "70% left")).toEqual({ mode: "inline", barWidth: DEFAULT_BAR_WIDTH })
+      expect(layoutBar(w, "70% left")).toEqual({ mode: "stacked", barWidth: DEFAULT_BAR_WIDTH })
     }
   })
 

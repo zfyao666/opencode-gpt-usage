@@ -13,11 +13,17 @@
  *
  * The bar adapts to the real sidebar width: the slot API exposes no
  * width, so the card measures its own content box (a `BoxRenderable`
- * ref read after Yoga layout) and re-derives the bar on the existing
- * 1 s tick — covering terminal resizes and sidebar toggles alike. The
- * card is `width="100%"`, so the measured width is parent-driven and
- * the bar can never feed back into its own measurement. Narrow slots
- * stack the bar full-row and move the percentage onto the footer.
+ * ref). The host re-invokes this slot function — rebuilding the whole
+ * subtree — whenever a signal read here changes (at least once per 1 s
+ * tick). At that moment the PREVIOUS subtree is still mounted and laid
+ * out, so its width is the true rendered width; a freshly created
+ * element always measures 0 because Yoga layout only runs in the render
+ * pass. Width is therefore sampled from the previous subtree at the top
+ * of each invocation and kept in a plain variable — never a signal, and
+ * never read off a just-created element. The card is `width="100%"`, so
+ * the measured width is parent-driven and the bar can never feed back
+ * into its own measurement. Narrow slots stack the bar full-row and
+ * move the percentage onto the footer.
  *
  * Fetches immediately, then every 120 s. Failures keep the last-good
  * snapshot but tag it stale (age > 15 min or failed refresh) — fresh data
@@ -47,16 +53,19 @@ const tui: TuiPlugin = async (api) => {
   const [view, setView] = createSignal<ViewState>({ kind: "loading" })
   const [now, setNow] = createSignal(Date.now())
 
-  // Measured content width of the card (inside border + padding). 0 means
-  // "not measured yet". The slot API hands us only { theme } — no width —
-  // so we read the laid-out width off our own content box via its ref. The
-  // card is width="100%", so this width is parent-driven and sizing the
-  // bar from it cannot feed back into the measurement.
-  const [contentWidth, setContentWidth] = createSignal(0)
+  // Last measured content width of the card (inside border + padding);
+  // 0 means "not measured yet". Deliberately NOT a signal: writing it
+  // must not retrigger the slot, and it is only ever read at the top of
+  // a slot invocation, where the host has already decided to rebuild.
+  // It is sampled from the PREVIOUS subtree (still mounted and laid out
+  // at that point) — a freshly created element measures 0 until the next
+  // render pass runs Yoga layout, which is exactly the trap that made
+  // the first version of this render the default 10-cell bar forever.
   let contentRef: BoxRenderable | undefined
-  const measure = () => {
+  let measuredWidth = 0
+  const sampleWidth = () => {
     const w = contentRef?.width ?? 0
-    if (w !== contentWidth()) setContentWidth(w)
+    if (w > 0) measuredWidth = w
   }
 
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -123,13 +132,11 @@ const tui: TuiPlugin = async (api) => {
     if (timer) clearTimeout(timer)
   })
 
-  // The 1 s clock tick doubles as the layout watch: re-measuring here
-  // picks up terminal resizes and sidebar toggles within a second,
-  // without depending on renderer internals.
-  const tick = setInterval(() => {
-    setNow(Date.now())
-    measure()
-  }, 1_000)
+  // The 1 s clock tick also drives width refreshes indirectly: each
+  // tick re-invokes the slot, which re-samples the laid-out width (see
+  // above) — so terminal resizes and sidebar toggles are picked up
+  // within a second without touching renderer internals.
+  const tick = setInterval(() => setNow(Date.now()), 1_000)
   api.lifecycle.onDispose(() => clearInterval(tick))
 
   void refresh()
@@ -138,6 +145,9 @@ const tui: TuiPlugin = async (api) => {
     order: 10,
     slots: {
       sidebar_content(ctx: TuiSlotContext) {
+        // Sample the previous subtree's real laid-out width before this
+        // rebuild replaces it; fresh elements would read 0 here.
+        sampleWidth()
         const theme = () => ctx.theme.current
         const state = view()
         const t = now()
@@ -172,7 +182,7 @@ const tui: TuiPlugin = async (api) => {
         const retryIn = snap.refreshError ? secondsUntil(snap.refreshError.retryAt, t) : 0
 
         const pctLabel = `${snap.remaining}% left`
-        const layout = layoutBar(contentWidth(), pctLabel)
+        const layout = layoutBar(measuredWidth, pctLabel)
         const bar = formatBar(snap.remaining, layout.barWidth)
         const barColor = stale
           ? theme().textMuted
@@ -197,8 +207,11 @@ const tui: TuiPlugin = async (api) => {
               flexDirection="column"
               minWidth={0}
               ref={(el) => {
+                // Assignment only — do NOT measure here. This element was
+                // just created and has not been through Yoga layout yet,
+                // so el.width is 0; measuring now would pin the bar at
+                // the pre-measurement default forever.
                 contentRef = el
-                measure()
               }}
             >
               <text fg={stale ? theme().warning : theme().text}>
