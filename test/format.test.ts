@@ -92,10 +92,26 @@ describe("layoutBar", () => {
 })
 
 describe("formatResetLocal", () => {
-  test("renders local HH:MM", () => {
+  test("renders local date + HH:MM as `D Mmm HH:MM`", () => {
     process.env.TZ = "UTC"
-    expect(formatResetLocal(Date.UTC(2026, 7, 24, 14, 30))).toBe("14:30")
-    expect(formatResetLocal(Date.UTC(2026, 7, 24, 0, 5))).toBe("00:05")
+    expect(formatResetLocal(Date.UTC(2026, 7, 24, 14, 30))).toBe("24 Aug 14:30")
+    expect(formatResetLocal(Date.UTC(2026, 7, 24, 0, 5))).toBe("24 Aug 00:05")
+    expect(formatResetLocal(Date.UTC(2026, 7, 28, 2, 20))).toBe("28 Aug 02:20")
+  })
+
+  test("no leading zero on the day of month; month table rolls over year-end", () => {
+    process.env.TZ = "UTC"
+    expect(formatResetLocal(Date.UTC(2026, 0, 1, 2, 20))).toBe("1 Jan 02:20")
+    expect(formatResetLocal(Date.UTC(2026, 11, 31, 23, 59))).toBe("31 Dec 23:59")
+  })
+
+  test("uses local wall-clock, not UTC", () => {
+    process.env.TZ = "UTC"
+    const instant = Date.UTC(2026, 7, 28, 2, 20)
+    expect(formatResetLocal(instant)).toBe("28 Aug 02:20")
+    process.env.TZ = "America/New_York" // UTC-4 in August
+    expect(formatResetLocal(instant)).toBe("27 Aug 22:20")
+    process.env.TZ = "UTC"
   })
 
   test("returns empty string for invalid timestamps", () => {

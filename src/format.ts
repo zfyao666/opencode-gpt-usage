@@ -61,11 +61,21 @@ export function layoutBar(contentWidth: number, pctLabel: string): BarLayout {
   return { mode: "stacked", barWidth: Math.min(Math.max(w, 1), MAX_BAR_WIDTH) }
 }
 
-/** Local wall-clock reset time, e.g. "14:30". "" when the timestamp is invalid. */
+/** English month abbreviations — locale-stable, so the reset date reads
+ *  the same in every environment (and in tests). */
+const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+/**
+ * Local calendar date + wall-clock reset time, e.g. "28 Aug 02:20".
+ * Concise form chosen to match the card's hierarchy: day-of-month without
+ * leading zero, 3-letter month, then the existing 24h HH:MM. "" when the
+ * timestamp is invalid.
+ */
 export function formatResetLocal(resetsAtMs: number): string {
   const d = new Date(resetsAtMs)
   if (Number.isNaN(d.getTime())) return ""
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })
+  return `${d.getDate()} ${MONTH_ABBR[d.getMonth()]} ${time}`
 }
 
 /** Compact age for stale labels: "12m", "2h", "2h 5m". Minimum 1m. */

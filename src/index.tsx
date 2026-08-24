@@ -8,7 +8,7 @@
  *
  *   ┌ WEEKLY ─────────────────┐
  *   │ ▓▓▓▓▓▓▓▓▓▓▓▓░░░░░ 70% left │
- *   │ resets 14:30              │
+ *   │ resets 28 Aug 02:20       │
  *   └───────────────────────────┘
  *
  * The bar adapts to the real sidebar width: the slot API exposes no
