@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import {
   clampPct,
+  DEFAULT_BAR_WIDTH,
   formatAge,
   formatBar,
   formatResetLocal,
+  layoutBar,
+  MAX_BAR_WIDTH,
+  MIN_BAR_WIDTH,
   secondsUntil,
   staleness,
   STALE_MS,
@@ -44,6 +48,46 @@ describe("formatBar", () => {
 
   test("non-finite remaining renders an empty bar", () => {
     expect(formatBar(NaN, 10)).toBe("░░░░░░░░░░")
+  })
+})
+
+describe("layoutBar", () => {
+  test("unmeasured width (0, negative, NaN) → pre-measurement default, inline", () => {
+    for (const w of [0, -5, NaN, Infinity, -Infinity]) {
+      expect(layoutBar(w, "70% left")).toEqual({ mode: "inline", barWidth: DEFAULT_BAR_WIDTH })
+    }
+  })
+
+  test("inline mode soaks up the row minus label and 1-cell gap", () => {
+    // "70% left" is 8 cells: 30 - 8 - 1 = 21
+    expect(layoutBar(30, "70% left")).toEqual({ mode: "inline", barWidth: 21 })
+    // "100% left" is 9 cells: 30 - 9 - 1 = 20
+    expect(layoutBar(30, "100% left")).toEqual({ mode: "inline", barWidth: 20 })
+    // fractional widths floor first
+    expect(layoutBar(30.9, "70% left")).toEqual({ mode: "inline", barWidth: 21 })
+  })
+
+  test("inline bar is capped at MAX_BAR_WIDTH on very wide sidebars", () => {
+    expect(layoutBar(80, "5% left")).toEqual({ mode: "inline", barWidth: MAX_BAR_WIDTH })
+    expect(layoutBar(10_000, "5% left")).toEqual({ mode: "inline", barWidth: MAX_BAR_WIDTH })
+  })
+
+  test("boundary: inline holds at exactly MIN_BAR_WIDTH, stacks one cell below", () => {
+    // 15 - 8 - 1 = 6 = MIN_BAR_WIDTH → inline
+    expect(layoutBar(15, "70% left")).toEqual({ mode: "inline", barWidth: MIN_BAR_WIDTH })
+    // 14 - 8 - 1 = 5 < MIN_BAR_WIDTH → stacked, bar gets the full row
+    expect(layoutBar(14, "70% left")).toEqual({ mode: "stacked", barWidth: 14 })
+  })
+
+  test("narrow stacked bars track the full width, clamped to ≥ 1", () => {
+    expect(layoutBar(8, "100% left")).toEqual({ mode: "stacked", barWidth: 8 })
+    expect(layoutBar(1, "100% left")).toEqual({ mode: "stacked", barWidth: 1 })
+  })
+
+  test("label length decides the breakpoint: wider labels stack sooner", () => {
+    // "100% left" (9) needs 9 + 1 + 6 = 16 for inline
+    expect(layoutBar(16, "100% left")).toEqual({ mode: "inline", barWidth: MIN_BAR_WIDTH })
+    expect(layoutBar(15, "100% left")).toEqual({ mode: "stacked", barWidth: 15 })
   })
 })
 

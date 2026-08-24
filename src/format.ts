@@ -22,6 +22,43 @@ export function formatBar(remaining: number, width: number): string {
   return "▓".repeat(filled) + "░".repeat(w - filled)
 }
 
+/** Smallest bar that still reads as a bar when sharing a row with the pct label. */
+export const MIN_BAR_WIDTH = 6
+/** Never let a very wide sidebar grow an absurd bar. */
+export const MAX_BAR_WIDTH = 40
+/**
+ * Bar width used only before the first layout measurement lands (initial
+ * frame). This is a pre-measurement default, not a fixed layout width —
+ * the measured width replaces it on the next tick.
+ */
+export const DEFAULT_BAR_WIDTH = 10
+
+export type BarLayout =
+  /** Bar and "N% left" share one row. */
+  | { mode: "inline"; barWidth: number }
+  /** Bar takes the full row; "N% left" moves to the footer line. */
+  | { mode: "stacked"; barWidth: number }
+
+/**
+ * Choose the bar width and row arrangement for a *measured* content width
+ * (the space inside the card's border and padding).
+ *
+ * - `contentWidth <= 0` / non-finite means "not measured yet" → the
+ *   pre-measurement default, rendered inline.
+ * - Inline when the bar keeps at least MIN_BAR_WIDTH cells beside the
+ *   label and the 1-cell gap; the bar soaks up all remaining width,
+ *   capped at MAX_BAR_WIDTH.
+ * - Otherwise stack: the bar gets the full row and the percentage moves
+ *   to the footer, so neither ever wraps or truncates awkwardly.
+ */
+export function layoutBar(contentWidth: number, pctLabel: string): BarLayout {
+  const w = Math.floor(contentWidth)
+  if (!Number.isFinite(w) || w <= 0) return { mode: "inline", barWidth: DEFAULT_BAR_WIDTH }
+  const inline = w - pctLabel.length - 1 // 1 = flex row gap
+  if (inline >= MIN_BAR_WIDTH) return { mode: "inline", barWidth: Math.min(inline, MAX_BAR_WIDTH) }
+  return { mode: "stacked", barWidth: Math.min(Math.max(w, 1), MAX_BAR_WIDTH) }
+}
+
 /** Local wall-clock reset time, e.g. "14:30". "" when the timestamp is invalid. */
 export function formatResetLocal(resetsAtMs: number): string {
   const d = new Date(resetsAtMs)

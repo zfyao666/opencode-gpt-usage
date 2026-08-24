@@ -6,10 +6,18 @@
  * and asks `chatgpt.com/backend-api/wham/usage` for the ~7-day weekly
  * window (selected by `limit_window_seconds`, never just position).
  *
- *   ┌ WEEKLY ──────────┐
- *   │ ▓▓▓▓▓▓▓░░░ 70% left │
- *   │ resets 14:30        │
- *   └─────────────────────┘
+ *   ┌ WEEKLY ─────────────────┐
+ *   │ ▓▓▓▓▓▓▓▓▓▓▓▓░░░░░ 70% left │
+ *   │ resets 14:30              │
+ *   └───────────────────────────┘
+ *
+ * The bar adapts to the real sidebar width: the slot API exposes no
+ * width, so the card measures its own content box (a `BoxRenderable`
+ * ref read after Yoga layout) and re-derives the bar on the existing
+ * 1 s tick — covering terminal resizes and sidebar toggles alike. The
+ * card is `width="100%"`, so the measured width is parent-driven and
+ * the bar can never feed back into its own measurement. Narrow slots
+ * stack the bar full-row and move the percentage onto the footer.
  *
  * Fetches immediately, then every 120 s. Failures keep the last-good
  * snapshot but tag it stale (age > 15 min or failed refresh) — fresh data
@@ -20,24 +28,36 @@
  * ever sent to chatgpt.com and never logged.
  */
 import type { TuiPlugin, TuiPluginModule, TuiSlotContext } from "@opencode-ai/plugin/tui"
-import { createSignal, Show } from "solid-js"
+import type { BoxRenderable } from "@opentui/core"
+import { createSignal } from "solid-js"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { getAccessCredentials, readCodexAuth } from "./auth"
 import { fetchWhamUsage, parseWhamUsage } from "./wham"
-import { formatAge, formatBar, formatResetLocal, secondsUntil, staleness } from "./format"
+import { formatAge, formatBar, formatResetLocal, layoutBar, secondsUntil, staleness } from "./format"
 import type { UsageError, UsageSnapshot, ViewState } from "./types"
 
 const POLL_MS = 120_000
 const RETRY_BASE_MS = 10_000
 const RETRY_MAX_MS = 120_000
-const CARD_BAR_WIDTH = 10
 
 const AUTH_FILE = join(homedir(), ".codex", "auth.json")
 
 const tui: TuiPlugin = async (api) => {
   const [view, setView] = createSignal<ViewState>({ kind: "loading" })
   const [now, setNow] = createSignal(Date.now())
+
+  // Measured content width of the card (inside border + padding). 0 means
+  // "not measured yet". The slot API hands us only { theme } — no width —
+  // so we read the laid-out width off our own content box via its ref. The
+  // card is width="100%", so this width is parent-driven and sizing the
+  // bar from it cannot feed back into the measurement.
+  const [contentWidth, setContentWidth] = createSignal(0)
+  let contentRef: BoxRenderable | undefined
+  const measure = () => {
+    const w = contentRef?.width ?? 0
+    if (w !== contentWidth()) setContentWidth(w)
+  }
 
   let timer: ReturnType<typeof setTimeout> | undefined
   let backoffMs = RETRY_BASE_MS
@@ -103,7 +123,13 @@ const tui: TuiPlugin = async (api) => {
     if (timer) clearTimeout(timer)
   })
 
-  const tick = setInterval(() => setNow(Date.now()), 1_000)
+  // The 1 s clock tick doubles as the layout watch: re-measuring here
+  // picks up terminal resizes and sidebar toggles within a second,
+  // without depending on renderer internals.
+  const tick = setInterval(() => {
+    setNow(Date.now())
+    measure()
+  }, 1_000)
   api.lifecycle.onDispose(() => clearInterval(tick))
 
   void refresh()
@@ -118,7 +144,7 @@ const tui: TuiPlugin = async (api) => {
 
         if (state.kind === "loading") {
           return (
-            <box border borderColor={theme().border} paddingX={1}>
+            <box border borderColor={theme().border} paddingX={1} width="100%">
               <text fg={theme().textMuted}>WEEKLY · loading…</text>
             </box>
           )
@@ -128,7 +154,7 @@ const tui: TuiPlugin = async (api) => {
           const err = state.error
           const auth = err.kind === "auth"
           return (
-            <box border borderColor={auth ? theme().error : theme().warning} paddingX={1}>
+            <box border borderColor={auth ? theme().error : theme().warning} paddingX={1} width="100%">
               <box flexDirection="column" minWidth={0}>
                 <text fg={auth ? theme().error : theme().warning}>WEEKLY · unavailable</text>
                 <text fg={theme().text} wrapMode="none" truncate>
@@ -145,7 +171,9 @@ const tui: TuiPlugin = async (api) => {
         const stale = staleness(snap, t) === "stale"
         const retryIn = snap.refreshError ? secondsUntil(snap.refreshError.retryAt, t) : 0
 
-        const bar = formatBar(snap.remaining, CARD_BAR_WIDTH)
+        const pctLabel = `${snap.remaining}% left`
+        const layout = layoutBar(contentWidth(), pctLabel)
+        const bar = formatBar(snap.remaining, layout.barWidth)
         const barColor = stale
           ? theme().textMuted
           : snap.remaining >= 50
@@ -154,20 +182,33 @@ const tui: TuiPlugin = async (api) => {
               ? theme().warning
               : theme().error
         const reset = formatResetLocal(snap.resetsAt)
-        const footer = stale
+        const footerCore = stale
           ? `resets ${reset} · stale ${formatAge(t - snap.fetchedAt)}` +
             (retryIn > 0 ? ` · retry ${retryIn}s` : "")
           : `resets ${reset}`
+        // Stacked (narrow) mode keeps the percentage visible by leading
+        // the footer with it; the footer truncates from the right, so the
+        // percentage is the last thing ever cut.
+        const footer = layout.mode === "stacked" ? `${pctLabel} · ${footerCore}` : footerCore
 
         return (
-          <box border borderColor={stale ? theme().warning : theme().border} paddingX={1}>
-            <box flexDirection="column" minWidth={0}>
+          <box border borderColor={stale ? theme().warning : theme().border} paddingX={1} width="100%">
+            <box
+              flexDirection="column"
+              minWidth={0}
+              ref={(el) => {
+                contentRef = el
+                measure()
+              }}
+            >
               <text fg={stale ? theme().warning : theme().text}>
                 {stale ? "WEEKLY · stale" : "WEEKLY"}
               </text>
               <box flexDirection="row" gap={1} alignItems="center" minWidth={0}>
                 <text fg={barColor}>{bar}</text>
-                <text fg={stale ? theme().textMuted : theme().text}>{snap.remaining}% left</text>
+                {layout.mode === "inline" ? (
+                  <text fg={stale ? theme().textMuted : theme().text}>{pctLabel}</text>
+                ) : null}
               </box>
               <text fg={theme().textMuted} wrapMode="none" truncate>
                 {footer}
