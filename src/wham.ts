@@ -29,6 +29,8 @@ export type WhamRateLimit = {
 
 export type WhamResponse = {
   rate_limit?: WhamRateLimit | null
+  /** e.g. "plus", "pro", "free" — subscription plan, when the API reports it. */
+  plan_type?: string | null
 }
 
 export type WhamResult =
@@ -162,5 +164,8 @@ export function selectWeeklyWindow(
 
 /** Parse a full wham response into the weekly window, if any. */
 export function parseWhamUsage(data: WhamResponse, now: number): WeeklyWindow | null {
-  return selectWeeklyWindow(data.rate_limit, now)
+  const weekly = selectWeeklyWindow(data.rate_limit, now)
+  if (!weekly) return null
+  const planType = typeof data.plan_type === "string" && data.plan_type.trim() ? data.plan_type : undefined
+  return planType ? { ...weekly, planType } : weekly
 }

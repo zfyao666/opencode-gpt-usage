@@ -12,6 +12,8 @@ export type WeeklyWindow = {
   resetsAt: number
   /** window duration in seconds, when the API provided one. */
   limitWindowSeconds?: number
+  /** raw WHAM plan_type ("plus", "pro", …), when the API reported one. */
+  planType?: string
 }
 
 export type UsageErrorKind = "auth" | "network" | "http" | "no-window"

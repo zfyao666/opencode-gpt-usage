@@ -61,21 +61,52 @@ export function layoutBar(contentWidth: number, pctLabel: string): BarLayout {
   return { mode: "stacked", barWidth: Math.min(Math.max(w, 1), MAX_BAR_WIDTH) }
 }
 
-/** English month abbreviations — locale-stable, so the reset date reads
- *  the same in every environment (and in tests). */
-const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+const pad2 = (n: number): string => String(n).padStart(2, "0")
 
 /**
- * Local calendar date + wall-clock reset time, e.g. "28 Aug 02:20".
- * Concise form chosen to match the card's hierarchy: day-of-month without
- * leading zero, 3-letter month, then the existing 24h HH:MM. "" when the
+ * Local reset timestamp in ISO style: "YYYY-MM-DD HH:mm" (24h), e.g.
+ * "2026-08-28 02:20". Built field-by-field so it is locale-stable and
+ * reads the same in every environment (and in tests). "" when the
  * timestamp is invalid.
  */
 export function formatResetLocal(resetsAtMs: number): string {
   const d = new Date(resetsAtMs)
   if (Number.isNaN(d.getTime())) return ""
-  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })
-  return `${d.getDate()} ${MONTH_ABBR[d.getMonth()]} ${time}`
+  return (
+    `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ` +
+    `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+  )
+}
+
+/** Known WHAM plan_type values → friendly suffixes. */
+const PLAN_NAMES: Record<string, string> = {
+  free: "Free",
+  go: "Go",
+  plus: "Plus",
+  pro: "Pro",
+  team: "Team",
+  business: "Business",
+  enterprise: "Enterprise",
+}
+
+/**
+ * Map a raw WHAM `plan_type` ("plus", "chatgpt_pro", …) to a friendly
+ * label: "ChatGPT Plus", "ChatGPT Pro", … Unknown non-empty values are
+ * title-cased and prefixed the same way; missing/blank/non-string values
+ * return null so the UI can simply omit the plan row.
+ */
+export function friendlyPlanName(planType: unknown): string | null {
+  if (typeof planType !== "string") return null
+  const norm = planType
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+  if (!norm) return null
+  const bare = norm.replace(/^chatgpt\s+/, "")
+  if (!bare) return "ChatGPT"
+  const name = PLAN_NAMES[bare] ?? bare.replace(/\b\w/g, (c) => c.toUpperCase())
+  return `ChatGPT ${name}`
 }
 
 /** Compact age for stale labels: "12m", "2h", "2h 5m". Minimum 1m. */

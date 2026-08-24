@@ -5,6 +5,7 @@ import {
   formatAge,
   formatBar,
   formatResetLocal,
+  friendlyPlanName,
   layoutBar,
   MAX_BAR_WIDTH,
   MIN_BAR_WIDTH,
@@ -92,31 +93,63 @@ describe("layoutBar", () => {
 })
 
 describe("formatResetLocal", () => {
-  test("renders local date + HH:MM as `D Mmm HH:MM`", () => {
+  test("renders local ISO-style `YYYY-MM-DD HH:mm`", () => {
     process.env.TZ = "UTC"
-    expect(formatResetLocal(Date.UTC(2026, 7, 24, 14, 30))).toBe("24 Aug 14:30")
-    expect(formatResetLocal(Date.UTC(2026, 7, 24, 0, 5))).toBe("24 Aug 00:05")
-    expect(formatResetLocal(Date.UTC(2026, 7, 28, 2, 20))).toBe("28 Aug 02:20")
+    expect(formatResetLocal(Date.UTC(2026, 7, 24, 14, 30))).toBe("2026-08-24 14:30")
+    expect(formatResetLocal(Date.UTC(2026, 7, 24, 0, 5))).toBe("2026-08-24 00:05")
+    expect(formatResetLocal(Date.UTC(2026, 7, 28, 2, 20))).toBe("2026-08-28 02:20")
   })
 
-  test("no leading zero on the day of month; month table rolls over year-end", () => {
+  test("zero-pads month, day, hour and minute; rolls over year-end", () => {
     process.env.TZ = "UTC"
-    expect(formatResetLocal(Date.UTC(2026, 0, 1, 2, 20))).toBe("1 Jan 02:20")
-    expect(formatResetLocal(Date.UTC(2026, 11, 31, 23, 59))).toBe("31 Dec 23:59")
+    expect(formatResetLocal(Date.UTC(2026, 0, 1, 2, 20))).toBe("2026-01-01 02:20")
+    expect(formatResetLocal(Date.UTC(2026, 11, 31, 23, 59))).toBe("2026-12-31 23:59")
   })
 
   test("uses local wall-clock, not UTC", () => {
     process.env.TZ = "UTC"
     const instant = Date.UTC(2026, 7, 28, 2, 20)
-    expect(formatResetLocal(instant)).toBe("28 Aug 02:20")
+    expect(formatResetLocal(instant)).toBe("2026-08-28 02:20")
     process.env.TZ = "America/New_York" // UTC-4 in August
-    expect(formatResetLocal(instant)).toBe("27 Aug 22:20")
+    expect(formatResetLocal(instant)).toBe("2026-08-27 22:20")
     process.env.TZ = "UTC"
   })
 
   test("returns empty string for invalid timestamps", () => {
     expect(formatResetLocal(NaN)).toBe("")
     expect(formatResetLocal(Infinity)).toBe("")
+  })
+})
+
+describe("friendlyPlanName", () => {
+  test("known plan_type values map to friendly ChatGPT names", () => {
+    expect(friendlyPlanName("plus")).toBe("ChatGPT Plus")
+    expect(friendlyPlanName("pro")).toBe("ChatGPT Pro")
+    expect(friendlyPlanName("free")).toBe("ChatGPT Free")
+    expect(friendlyPlanName("go")).toBe("ChatGPT Go")
+    expect(friendlyPlanName("team")).toBe("ChatGPT Team")
+    expect(friendlyPlanName("business")).toBe("ChatGPT Business")
+    expect(friendlyPlanName("enterprise")).toBe("ChatGPT Enterprise")
+  })
+
+  test("normalizes case, separators and an existing chatgpt prefix", () => {
+    expect(friendlyPlanName("PLUS")).toBe("ChatGPT Plus")
+    expect(friendlyPlanName(" plus ")).toBe("ChatGPT Plus")
+    expect(friendlyPlanName("chatgpt_pro")).toBe("ChatGPT Pro")
+    expect(friendlyPlanName("ChatGPT-Pro")).toBe("ChatGPT Pro")
+  })
+
+  test("unknown values are title-cased with the ChatGPT prefix", () => {
+    expect(friendlyPlanName("trial")).toBe("ChatGPT Trial")
+    expect(friendlyPlanName("pro_max")).toBe("ChatGPT Pro Max")
+  })
+
+  test("missing, blank or non-string values return null (UI omits the row)", () => {
+    expect(friendlyPlanName(undefined)).toBeNull()
+    expect(friendlyPlanName(null)).toBeNull()
+    expect(friendlyPlanName("")).toBeNull()
+    expect(friendlyPlanName("   ")).toBeNull()
+    expect(friendlyPlanName(42)).toBeNull()
   })
 })
 

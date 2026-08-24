@@ -6,10 +6,11 @@
  * and asks `chatgpt.com/backend-api/wham/usage` for the ~7-day weekly
  * window (selected by `limit_window_seconds`, never just position).
  *
- *   ┌ WEEKLY ─────────────────┐
- *   │ ▓▓▓▓▓▓▓▓▓▓▓▓░░░░░ 70% left │
- *   │ resets 28 Aug 02:20       │
- *   └───────────────────────────┘
+ *   ┌ OpenCode GPT Usage ───────┐
+ *   │ ChatGPT Plus                 │
+ *   │ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░ 70%  │
+ *   │ resets 2026-08-28 02:20      │
+ *   └─────────────────────────────┘
  *
  * The bar adapts to the real sidebar width: the slot API exposes no
  * width, so the card measures its own content box (a `BoxRenderable`
@@ -40,12 +41,23 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import { getAccessCredentials, readCodexAuth } from "./auth"
 import { fetchWhamUsage, parseWhamUsage } from "./wham"
-import { formatAge, formatBar, formatResetLocal, layoutBar, secondsUntil, staleness } from "./format"
+import {
+  formatAge,
+  formatBar,
+  formatResetLocal,
+  friendlyPlanName,
+  layoutBar,
+  secondsUntil,
+  staleness,
+} from "./format"
 import type { UsageError, UsageSnapshot, ViewState } from "./types"
 
 const POLL_MS = 120_000
 const RETRY_BASE_MS = 10_000
 const RETRY_MAX_MS = 120_000
+
+/** Card title shown in every state. */
+const CARD_TITLE = "OpenCode GPT Usage"
 
 const AUTH_FILE = join(homedir(), ".codex", "auth.json")
 
@@ -155,7 +167,9 @@ const tui: TuiPlugin = async (api) => {
         if (state.kind === "loading") {
           return (
             <box border borderColor={theme().border} paddingX={1} width="100%">
-              <text fg={theme().textMuted}>WEEKLY · loading…</text>
+              <text fg={theme().textMuted} wrapMode="none" truncate>
+                {`${CARD_TITLE} · loading…`}
+              </text>
             </box>
           )
         }
@@ -166,7 +180,9 @@ const tui: TuiPlugin = async (api) => {
           return (
             <box border borderColor={auth ? theme().error : theme().warning} paddingX={1} width="100%">
               <box flexDirection="column" minWidth={0}>
-                <text fg={auth ? theme().error : theme().warning}>WEEKLY · unavailable</text>
+                <text fg={auth ? theme().error : theme().warning} wrapMode="none" truncate>
+                  {`${CARD_TITLE} · unavailable`}
+                </text>
                 <text fg={theme().text} wrapMode="none" truncate>
                   {err.message}
                 </text>
@@ -181,7 +197,8 @@ const tui: TuiPlugin = async (api) => {
         const stale = staleness(snap, t) === "stale"
         const retryIn = snap.refreshError ? secondsUntil(snap.refreshError.retryAt, t) : 0
 
-        const pctLabel = `${snap.remaining}% left`
+        const pctLabel = `${snap.remaining}%`
+        const plan = friendlyPlanName(snap.planType)
         const layout = layoutBar(measuredWidth, pctLabel)
         const bar = formatBar(snap.remaining, layout.barWidth)
         const barColor = stale
@@ -214,9 +231,14 @@ const tui: TuiPlugin = async (api) => {
                 contentRef = el
               }}
             >
-              <text fg={stale ? theme().warning : theme().text}>
-                {stale ? "WEEKLY · stale" : "WEEKLY"}
+              <text fg={stale ? theme().warning : theme().text} wrapMode="none" truncate>
+                {stale ? `${CARD_TITLE} · stale` : CARD_TITLE}
               </text>
+              {plan ? (
+                <text fg={theme().textMuted} wrapMode="none" truncate>
+                  {plan}
+                </text>
+              ) : null}
               <box flexDirection="row" gap={1} alignItems="center" minWidth={0}>
                 <text fg={barColor}>{bar}</text>
                 {layout.mode === "inline" ? (
