@@ -1,0 +1,47 @@
+{
+  "name": "@zfyao666/opencode-gpt-usage",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ChatGPT (Codex) weekly quota card for the opencode TUI right sidebar — WEEKLY ▓▓▓▓▓▓▓░░░ 70% left · resets 14:30.",
+  "type": "module",
+  "license": "MIT",
+  "author": "zhufengyao <527936342@qq.com>",
+  "keywords": ["opencode", "tui", "plugin", "chatgpt", "codex", "gpt", "quota", "usage", "sidebar", "wham"],
+  "homepage": "https://github.com/zfyao666/opencode-gpt-usage",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zfyao666/opencode-gpt-usage.git"
+  },
+  "bugs": {
+    "url": "https://github.com/zfyao666/opencode-gpt-usage/issues"
+  },
+  "exports": {
+    "./tui": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "engines": {
+    "opencode": ">=1.18"
+  },
+  "scripts": {
+    "build": "bun run build.ts && tsc",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
+    "test": "bun test",
+    "prepublishOnly": "bun run build"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.18",
+    "@opentui/solid": "*",
+    "solid-js": "*"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "^1.18.0",
+    "@opentui/solid": "^0.4.3",
+    "@types/node": "^26.1.1",
+    "bun-types": "latest",
+    "solid-js": "*",
+    "typescript": "^5"
+  }
+}
