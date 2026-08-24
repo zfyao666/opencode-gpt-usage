@@ -7,10 +7,18 @@
  * window (selected by `limit_window_seconds`, never just position).
  *
  *   ┌ OpenCode GPT Usage ───────┐
- *   │ ChatGPT Plus                 │
+ *   │ ● ChatGPT Plus               │
  *   │ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░ 70%  │
- *   │ resets 2026-08-28 02:20      │
+ *   │ ● started 2026-08-21 02:20   │
+ *   │ ● resets  2026-08-28 02:20   │
  *   └─────────────────────────────┘
+ *
+ * Detail rows (plan / started / bulleted resets) appear only when the
+ * measured content width fits them (DETAIL_MIN_WIDTH); narrower cards
+ * keep just the actionable reset footer so the percentage is never
+ * crowded out. The started row exists only when the API reported a
+ * real window duration — a position-fallback window has no honest
+ * start and renders nothing.
  *
  * The bar adapts to the real sidebar width: the slot API exposes no
  * width, so the card measures its own content box (a `BoxRenderable`
@@ -42,11 +50,13 @@ import { join } from "node:path"
 import { getAccessCredentials, readCodexAuth } from "./auth"
 import { fetchWhamUsage, parseWhamUsage } from "./wham"
 import {
+  DETAIL_MIN_WIDTH,
   formatAge,
   formatBar,
   formatResetLocal,
   friendlyPlanName,
   layoutBar,
+  periodStart,
   secondsUntil,
   staleness,
 } from "./format"
@@ -199,6 +209,10 @@ const tui: TuiPlugin = async (api) => {
 
         const pctLabel = `${snap.remaining}%`
         const plan = friendlyPlanName(snap.planType)
+        const start = periodStart(snap.resetsAt, snap.limitWindowSeconds)
+        // Detail bullet rows (plan / started / bulleted resets) only when
+        // the measured width fits them; narrower cards stay lean.
+        const showDetails = measuredWidth >= DETAIL_MIN_WIDTH
         const layout = layoutBar(measuredWidth, pctLabel)
         const bar = formatBar(snap.remaining, layout.barWidth)
         const barColor = stale
@@ -209,14 +223,18 @@ const tui: TuiPlugin = async (api) => {
               ? theme().warning
               : theme().error
         const reset = formatResetLocal(snap.resetsAt)
-        const footerCore = stale
-          ? `resets ${reset} · stale ${formatAge(t - snap.fetchedAt)}` +
-            (retryIn > 0 ? ` · retry ${retryIn}s` : "")
-          : `resets ${reset}`
-        // Stacked (narrow) mode keeps the percentage visible by leading
-        // the footer with it; the footer truncates from the right, so the
-        // percentage is the last thing ever cut.
-        const footer = layout.mode === "stacked" ? `${pctLabel} · ${footerCore}` : footerCore
+        const staleSuffix = stale
+          ? ` · stale ${formatAge(t - snap.fetchedAt)}` + (retryIn > 0 ? ` · retry ${retryIn}s` : "")
+          : ""
+        // Wide: muted bullet rows; `resets` is padded to align its
+        // timestamp with `started`. Narrow/stacked: keep only the
+        // actionable footer, leading with the percentage in stacked mode
+        // so truncation always cuts it last.
+        const footer = showDetails
+          ? `● resets  ${reset}${staleSuffix}`
+          : layout.mode === "stacked"
+            ? `${pctLabel} · resets ${reset}${staleSuffix}`
+            : `resets ${reset}${staleSuffix}`
 
         return (
           <box border borderColor={stale ? theme().warning : theme().border} paddingX={1} width="100%">
@@ -234,9 +252,9 @@ const tui: TuiPlugin = async (api) => {
               <text fg={stale ? theme().warning : theme().text} wrapMode="none" truncate>
                 {stale ? `${CARD_TITLE} · stale` : CARD_TITLE}
               </text>
-              {plan ? (
+              {showDetails && plan ? (
                 <text fg={theme().textMuted} wrapMode="none" truncate>
-                  {plan}
+                  {`● ${plan}`}
                 </text>
               ) : null}
               <box flexDirection="row" gap={1} alignItems="center" minWidth={0}>
@@ -245,6 +263,11 @@ const tui: TuiPlugin = async (api) => {
                   <text fg={stale ? theme().textMuted : theme().text}>{pctLabel}</text>
                 ) : null}
               </box>
+              {showDetails && start !== null ? (
+                <text fg={theme().textMuted} wrapMode="none" truncate>
+                  {`● started ${formatResetLocal(start)}`}
+                </text>
+              ) : null}
               <text fg={theme().textMuted} wrapMode="none" truncate>
                 {footer}
               </text>

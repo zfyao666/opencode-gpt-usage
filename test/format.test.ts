@@ -4,6 +4,7 @@ import {
   formatBar,
   formatResetLocal,
   friendlyPlanName,
+  periodStart,
   staleness,
   STALE_MS,
 } from "../src/format"
@@ -39,6 +40,27 @@ describe("formatResetLocal", () => {
     expect(formatResetLocal(Date.UTC(2026, 7, 28, 2, 20))).toBe("2026-08-28 02:20")
     expect(formatResetLocal(Date.UTC(2026, 11, 31, 23, 59))).toBe("2026-12-31 23:59")
     expect(formatResetLocal(NaN)).toBe("")
+  })
+})
+
+describe("periodStart", () => {
+  const RESET = Date.UTC(2026, 7, 28, 2, 20)
+
+  test("subtracts the window duration from the reset", () => {
+    expect(periodStart(RESET, 7 * 24 * 3600)).toBe(RESET - 7 * 24 * 3600 * 1000)
+    expect(periodStart(RESET, 3600)).toBe(RESET - 3_600_000)
+  })
+
+  test("null when the API gave no usable duration — never fabricate a start", () => {
+    expect(periodStart(RESET, undefined)).toBeNull()
+    expect(periodStart(RESET, 0)).toBeNull()
+    expect(periodStart(RESET, -3600)).toBeNull()
+    expect(periodStart(RESET, NaN)).toBeNull()
+    expect(periodStart(RESET, Infinity)).toBeNull()
+  })
+
+  test("null when the derived start would be non-positive", () => {
+    expect(periodStart(1_000, 7 * 24 * 3600)).toBeNull()
   })
 })
 

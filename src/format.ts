@@ -118,6 +118,33 @@ export function formatAge(ms: number): string {
   return `${mins}m`
 }
 
+/**
+ * Derive the period start from the reset time and the window duration.
+ * Returns null when the API gave no usable duration — a weekly window
+ * selected by position fallback has no honest start, so the UI must omit
+ * the row rather than fabricate one.
+ */
+export function periodStart(resetsAtMs: number, limitWindowSeconds?: number): number | null {
+  if (
+    typeof limitWindowSeconds !== "number" ||
+    !Number.isFinite(limitWindowSeconds) ||
+    limitWindowSeconds <= 0
+  ) {
+    return null
+  }
+  const start = resetsAtMs - limitWindowSeconds * 1000
+  return Number.isFinite(start) && start > 0 ? start : null
+}
+
+/**
+ * Minimum measured content width for the muted detail bullet rows
+ * (`● ChatGPT Plus`, `● started …`, `● resets  …`). The longest of these
+ * is `● resets  YYYY-MM-DD HH:mm` = 25 cells; below this the card keeps
+ * only the actionable footer so narrow slots stay uncluttered and the
+ * percentage is never crowded out.
+ */
+export const DETAIL_MIN_WIDTH = 25
+
 export type Staleness = "fresh" | "stale"
 
 /**
