@@ -158,10 +158,9 @@ automatically).
 
 ## Contributing
 
-Contributions welcome — especially new providers (see the checklist in
-[CONTRIBUTING.md](CONTRIBUTING.md)). The whole plugin is a single file, and
-opencode transpiles `.tsx` on the fly, so you can hack on it with no build
-step.
+Contributions welcome — especially new providers. The whole plugin is a
+single file, and opencode transpiles `.tsx` on the fly, so you can hack on
+it with no build step.
 
 ## License
 
