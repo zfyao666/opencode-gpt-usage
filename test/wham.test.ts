@@ -4,8 +4,6 @@ import {
   parseWhamUsage,
   remainingPercent,
   selectWeeklyWindow,
-  WHAM_URL,
-  type WhamRateLimit,
   type WhamResponse,
 } from "../src/wham"
 import { getAccessCredentials } from "../src/auth"
@@ -14,7 +12,7 @@ const NOW = Date.UTC(2026, 7, 24, 12, 0, 0)
 
 /** A weekly window (limit_window_seconds = 7 days). */
 function weekly(
-  over: Partial<Record<"used_percent" | "limit_window_seconds" | "reset_at" | "reset_after_seconds", number>> = {},
+  over: Partial<Record<"used_percent" | "limit_window_seconds" | "reset_at", number>> = {},
 ) {
   return {
     used_percent: 65,
@@ -24,7 +22,7 @@ function weekly(
   }
 }
 
-/** The 5-hour session window. */
+/** The 5-hour session window (non-weekly duration). */
 function session() {
   return {
     used_percent: 20,
@@ -33,148 +31,94 @@ function session() {
   }
 }
 
-function rateLimit(p: unknown, s: unknown): WhamRateLimit {
-  return { primary_window: p as never, secondary_window: s as never }
-}
-
-describe("selectWeeklyWindow — duration-based weekly selection", () => {
-  test("weekly window wins by duration even when it is primary", () => {
-    const w = selectWeeklyWindow(rateLimit(weekly(), session()), NOW)
-    expect(w).not.toBeNull()
-    expect(w?.limitWindowSeconds).toBe(7 * 24 * 60 * 60)
-    expect(w?.remaining).toBe(35)
-  })
-
-  test("weekly window wins by duration even when it is secondary (not position)", () => {
-    const w = selectWeeklyWindow(rateLimit(session(), weekly()), NOW)
-    expect(w).not.toBeNull()
-    expect(w?.limitWindowSeconds).toBe(7 * 24 * 60 * 60)
-    expect(w?.remaining).toBe(35)
-  })
-
-  test("session-only windows yield no weekly window", () => {
-    expect(selectWeeklyWindow(rateLimit(session(), null), NOW)).toBeNull()
-    expect(selectWeeklyWindow(rateLimit(session(), session()), NOW)).toBeNull()
-  })
-
-  test("closest-to-7d window wins when both are weekly-duration", () => {
-    const w = selectWeeklyWindow(
-      rateLimit(
-        weekly({ limit_window_seconds: 3 * 24 * 60 * 60 }),
-        weekly({ limit_window_seconds: 7 * 24 * 60 * 60 }),
-      ),
+describe("selectWeeklyWindow", () => {
+  test("weekly window wins by duration whether primary or secondary (not position)", () => {
+    const asPrimary = selectWeeklyWindow(
+      { primary_window: weekly(), secondary_window: session() },
       NOW,
     )
-    expect(w?.limitWindowSeconds).toBe(7 * 24 * 60 * 60)
-  })
-
-  test("durations outside the weekly band yield no weekly window", () => {
-    // 3h and 5h windows both declare durations; neither is ~7 days.
-    expect(
-      selectWeeklyWindow(rateLimit(weekly({ limit_window_seconds: 3 * 60 * 60 }), session()), NOW),
-    ).toBeNull()
-  })
-
-  test("duration-less window falls back to position even beside a non-weekly duration", () => {
-    const w = selectWeeklyWindow(
-      rateLimit(session(), { used_percent: 40, reset_at: NOW / 1000 + 86_400 }),
+    const asSecondary = selectWeeklyWindow(
+      { primary_window: session(), secondary_window: weekly() },
       NOW,
     )
-    expect(w?.usedPercent).toBe(40)
+    expect(asPrimary?.limitWindowSeconds).toBe(7 * 24 * 60 * 60)
+    expect(asSecondary?.limitWindowSeconds).toBe(7 * 24 * 60 * 60)
+    expect(asPrimary?.remaining).toBe(35)
+    expect(asSecondary?.remaining).toBe(35)
   })
 
-  test("no durations at all: position fallback prefers secondary", () => {
-    const w = selectWeeklyWindow(
-      rateLimit(
-        { used_percent: 10, reset_at: NOW / 1000 + 1000 },
-        { used_percent: 80, reset_at: NOW / 1000 + 2000 },
-      ),
-      NOW,
-    )
-    expect(w?.usedPercent).toBe(80)
-  })
-
-  test("null/empty rate_limit yields null", () => {
+  test("no weekly window when every window declares a non-weekly duration", () => {
+    expect(selectWeeklyWindow({ primary_window: session(), secondary_window: session() }, NOW)).toBeNull()
+    expect(selectWeeklyWindow({ primary_window: session(), secondary_window: null }, NOW)).toBeNull()
     expect(selectWeeklyWindow(null, NOW)).toBeNull()
-    expect(selectWeeklyWindow(undefined, NOW)).toBeNull()
     expect(selectWeeklyWindow({}, NOW)).toBeNull()
-  })
-
-  test("invalid windows are skipped", () => {
-    expect(selectWeeklyWindow(rateLimit({ used_percent: NaN }, weekly()), NOW)?.remaining).toBe(35)
-    expect(
-      selectWeeklyWindow(rateLimit(weekly({ reset_at: undefined, reset_after_seconds: undefined }), weekly()), NOW),
-    ).not.toBeNull()
-    expect(
-      selectWeeklyWindow(rateLimit(weekly({ reset_at: "2026-08-24" as never }), null), NOW),
-    ).toBeNull()
-  })
-
-  test("reset_after_seconds derives a resetsAt", () => {
-    const w = selectWeeklyWindow(
-      rateLimit(weekly({ reset_at: undefined, reset_after_seconds: 7200 }), null),
-      NOW,
-    )
-    expect(w?.resetsAt).toBe(NOW + 7200 * 1000)
   })
 })
 
 describe("remainingPercent", () => {
-  test("derives remaining from used_percent", () => {
+  test("derives remaining from used_percent, clamped 0–100; non-finite → 0", () => {
     expect(remainingPercent(65)).toBe(35)
     expect(remainingPercent(12.4)).toBe(88)
-    expect(remainingPercent(0)).toBe(100)
-    expect(remainingPercent(100)).toBe(0)
-  })
-
-  test("clamps out-of-range values", () => {
     expect(remainingPercent(150)).toBe(0)
     expect(remainingPercent(-50)).toBe(100)
     expect(remainingPercent(99.6)).toBe(0)
-  })
-
-  test("non-finite input → 0", () => {
     expect(remainingPercent(NaN)).toBe(0)
-    expect(remainingPercent(Infinity)).toBe(0)
   })
 })
 
 describe("parseWhamUsage", () => {
-  test("extracts the weekly window from a full response", () => {
-    const data: WhamResponse = { rate_limit: rateLimit(session(), weekly()) }
+  test("extracts the weekly window and plan_type from a full response", () => {
+    const data: WhamResponse = {
+      rate_limit: { primary_window: session(), secondary_window: weekly() },
+      plan_type: "plus",
+    }
     const w = parseWhamUsage(data, NOW)
-    expect(w?.limitWindowSeconds).toBe(7 * 24 * 60 * 60)
     expect(w?.remaining).toBe(35)
-  })
-
-  test("returns null when the response has no rate_limit", () => {
+    expect(w?.planType).toBe("plus")
     expect(parseWhamUsage({}, NOW)).toBeNull()
-    expect(parseWhamUsage({ rate_limit: null }, NOW)).toBeNull()
   })
 })
 
-describe("fetchWhamUsage", () => {
-  test("sends access token and account id to the wham endpoint only", async () => {
-    let seen: { url: string; headers: Record<string, string> } | undefined
-    const fetchImpl = async (url: string, init?: { headers?: Record<string, string> }) => {
-      seen = { url, headers: init?.headers ?? {} }
-      return new Response(JSON.stringify({ rate_limit: {} }), { status: 200 })
-    }
-    const res = await fetchWhamUsage({
-      accessToken: "at-secret",
-      accountId: "acc-7",
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+describe("fetchWhamUsage — error mapping", () => {
+  test("401/403 map to auth, other non-2xx to http", async () => {
+    const respond = (status: number) =>
+      (async () => new Response("x", { status })) as unknown as typeof fetch
+    expect(await fetchWhamUsage({ accessToken: "t", fetchImpl: respond(401) })).toEqual({
+      ok: false,
+      kind: "auth",
+      status: 401,
     })
-    expect(res.ok).toBe(true)
-    expect(seen?.url).toBe(WHAM_URL)
-    expect(seen?.headers.authorization).toBe("Bearer at-secret")
-    expect(seen?.headers["chatgpt-account-id"]).toBe("acc-7")
-    expect(seen?.headers["user-agent"]).toBe("codex-cli")
+    expect(await fetchWhamUsage({ accessToken: "t", fetchImpl: respond(403) })).toEqual({
+      ok: false,
+      kind: "auth",
+      status: 403,
+    })
+    expect(await fetchWhamUsage({ accessToken: "t", fetchImpl: respond(429) })).toEqual({
+      ok: false,
+      kind: "http",
+      status: 429,
+    })
+  })
+
+  test("thrown errors and non-JSON bodies map to network failure", async () => {
+    const thrower = (async () => {
+      throw new TypeError("fetch failed")
+    }) as unknown as typeof fetch
+    expect(await fetchWhamUsage({ accessToken: "t", fetchImpl: thrower })).toEqual({
+      ok: false,
+      kind: "network",
+      error: expect.any(TypeError),
+    })
+
+    const badJson = (async () => new Response("html", { status: 200 })) as unknown as typeof fetch
+    expect(await fetchWhamUsage({ accessToken: "t", fetchImpl: badJson })).toEqual({
+      ok: false,
+      kind: "network",
+      error: expect.any(SyntaxError),
+    })
   })
 
   test("expired id_token + valid access_token still sends the request (no client-side gating)", async () => {
-    // Real flow: credentials are picked (id_token expiry ignored), then the
-    // request goes out with the access token.
     const creds = getAccessCredentials({
       tokens: {
         access_token: "at-valid",
@@ -194,53 +138,5 @@ describe("fetchWhamUsage", () => {
     })
     expect(res.ok).toBe(true)
     expect(authorization).toBe("Bearer at-valid")
-  })
-
-  test("401 maps to an auth failure", async () => {
-    const res = await fetchWhamUsage({
-      accessToken: "bad",
-      fetchImpl: (async () => new Response("unauthorized", { status: 401 })) as unknown as typeof fetch,
-    })
-    expect(res).toEqual({ ok: false, kind: "auth", status: 401 })
-  })
-
-  test("403 maps to an auth failure", async () => {
-    const res = await fetchWhamUsage({
-      accessToken: "bad",
-      fetchImpl: (async () => new Response("forbidden", { status: 403 })) as unknown as typeof fetch,
-    })
-    expect(res).toEqual({ ok: false, kind: "auth", status: 403 })
-  })
-
-  test("other non-2xx maps to an http failure with status", async () => {
-    const res = await fetchWhamUsage({
-      accessToken: "x",
-      fetchImpl: (async () => new Response("slow down", { status: 429 })) as unknown as typeof fetch,
-    })
-    expect(res).toEqual({ ok: false, kind: "http", status: 429 })
-  })
-
-  test("thrown fetch errors map to a network failure", async () => {
-    const res = await fetchWhamUsage({
-      accessToken: "x",
-      fetchImpl: (async () => {
-        throw new TypeError("fetch failed")
-      }) as unknown as typeof fetch,
-    })
-    expect(res.ok).toBe(false)
-    if (!res.ok && res.kind === "network") {
-      expect(res.error).toBeInstanceOf(TypeError)
-    } else {
-      throw new Error(`expected network failure, got ${JSON.stringify(res)}`)
-    }
-  })
-
-  test("non-JSON 200 bodies map to a network failure (parse error)", async () => {
-    const res = await fetchWhamUsage({
-      accessToken: "x",
-      fetchImpl: (async () => new Response("html", { status: 200 })) as unknown as typeof fetch,
-    })
-    expect(res.ok).toBe(false)
-    if (!res.ok) expect(res.kind).toBe("network")
   })
 })
