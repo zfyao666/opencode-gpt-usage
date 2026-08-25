@@ -29,6 +29,12 @@ jobs:
         with:
           node-version: 22
 
+      - name: Upgrade npm for OIDC trusted publishing
+        # npm trusted publishing (OIDC provenance) requires npm >= 11.5.1;
+        # the Node 22 image ships an older npm (10.9.8), which fails with
+        # ENEEDAUTH at publish time.
+        run: npm install -g npm@^11.5.1
+
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
 
