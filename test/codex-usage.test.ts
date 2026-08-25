@@ -4,6 +4,10 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
   collectUsageOutcome,
+  FIVE_HOUR_BAND_MAX_SECONDS,
+  FIVE_HOUR_BAND_MIN_SECONDS,
+  FIVE_HOUR_LENGTH_SECONDS,
+  reduceUsageWindows,
   reduceWeeklyWindow,
   shareRemaining,
   USAGE_ENDPOINT_URL,
@@ -31,12 +35,26 @@ function weeklyReport(
   }
 }
 
-/** A short non-weekly session window (5 h). */
-function sessionReport() {
+/** A five-hour window report (limit_window_seconds = 5 h). */
+function fiveHourReport(
+  over: Partial<
+    Record<"used_percent" | "limit_window_seconds" | "reset_at" | "reset_after_seconds", number>
+  > = {},
+) {
   return {
     used_percent: 20,
-    limit_window_seconds: 18_000,
+    limit_window_seconds: FIVE_HOUR_LENGTH_SECONDS,
     reset_at: NOW / 1000 + 3_600,
+    ...over,
+  }
+}
+
+/** A window whose duration is outside both the five-hour and weekly bands. */
+function outOfBandReport(durationSeconds: number) {
+  return {
+    used_percent: 30,
+    limit_window_seconds: durationSeconds,
+    reset_at: NOW / 1000 + 86_400,
   }
 }
 
@@ -87,7 +105,7 @@ describe("collectUsageOutcome — outcome union shape", () => {
         credentialsPath: have,
         fetchImpl: captureFetch(() => okJson(null)).fetchImpl,
       })
-      expect(invalid).toEqual({ state: "invalid-or-no-weekly" })
+      expect(invalid).toEqual({ state: "invalid-or-no-window" })
 
       const available = await collectUsageOutcome({
         credentialsPath: have,
@@ -96,7 +114,9 @@ describe("collectUsageOutcome — outcome union shape", () => {
       })
       expect(available.state).toBe("available")
       if (available.state === "available") {
-        expect(available.weekly.remaining).toBe(35)
+        expect(available.windows).toHaveLength(1)
+        expect(available.windows[0].kind).toBe("weekly")
+        expect(available.windows[0].remaining).toBe(35)
       }
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -267,14 +287,86 @@ describe("collectUsageOutcome — payload shapes are ordinary safe failures", ()
     await rm(dir, { recursive: true, force: true })
   })
 
-  test("valid-JSON null / primitives / arrays / empty object → invalid-or-no-weekly", async () => {
+  test("valid-JSON null / primitives / arrays / empty object → invalid-or-no-window", async () => {
     const credsPath = join(dir, "auth.json")
     await writeFile(credsPath, JSON.stringify({ tokens: { access_token: SECRET } }))
     for (const body of ["null", "42", '"text"', "true", "[1,2,3]", "{}", '{"rate_limit": null}']) {
       const { fetchImpl } = captureFetch(() => new Response(body, { status: 200 }))
       expect(await collectUsageOutcome({ credentialsPath: credsPath, fetchImpl })).toEqual({
-        state: "invalid-or-no-weekly",
+        state: "invalid-or-no-window",
       })
+    }
+  })
+
+  test("windows declaring durations outside both bands → invalid-or-no-window", async () => {
+    const credsPath = join(dir, "auth.json")
+    await writeFile(credsPath, JSON.stringify({ tokens: { access_token: SECRET } }))
+    for (const duration of [2 * 60 * 60, 20 * 24 * 60 * 60]) {
+      const { fetchImpl } = captureFetch(() =>
+        okJson({ rate_limit: { primary_window: outOfBandReport(duration) } }),
+      )
+      expect(await collectUsageOutcome({ credentialsPath: credsPath, fetchImpl })).toEqual({
+        state: "invalid-or-no-window",
+      })
+    }
+  })
+})
+
+describe("collectUsageOutcome — window kinds", () => {
+  let dir: string
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "gpt-usage-kinds-"))
+  })
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  const credsPath = () => join(dir, "auth.json")
+
+  test("five-hour only → available with just the five-hour window", async () => {
+    await writeFile(credsPath(), JSON.stringify({ tokens: { access_token: SECRET } }))
+    const outcome = await collectUsageOutcome({
+      credentialsPath: credsPath(),
+      fetchImpl: captureFetch(() => okJson({ rate_limit: { primary_window: fiveHourReport() } }))
+        .fetchImpl,
+    })
+    expect(outcome.state).toBe("available")
+    if (outcome.state === "available") {
+      expect(outcome.windows.map((w) => w.kind)).toEqual(["five-hour"])
+      expect(outcome.windows[0].remaining).toBe(80)
+    }
+  })
+
+  test("both windows → available, five-hour first then weekly", async () => {
+    await writeFile(credsPath(), JSON.stringify({ tokens: { access_token: SECRET } }))
+    const outcome = await collectUsageOutcome({
+      credentialsPath: credsPath(),
+      fetchImpl: captureFetch(() =>
+        okJson({ rate_limit: { primary_window: fiveHourReport(), secondary_window: weeklyReport() } }),
+      ).fetchImpl,
+    })
+    expect(outcome.state).toBe("available")
+    if (outcome.state === "available") {
+      expect(outcome.windows.map((w) => w.kind)).toEqual(["five-hour", "weekly"])
+      expect(outcome.windows[0].remaining).toBe(80)
+      expect(outcome.windows[1].remaining).toBe(35)
+    }
+  })
+
+  test("plan_type rides at the outcome level, not on the windows", async () => {
+    await writeFile(credsPath(), JSON.stringify({ tokens: { access_token: SECRET } }))
+    const outcome = await collectUsageOutcome({
+      credentialsPath: credsPath(),
+      fetchImpl: captureFetch(() =>
+        okJson({ plan_type: "plus", rate_limit: { primary_window: weeklyReport() } }),
+      ).fetchImpl,
+    })
+    expect(outcome.state).toBe("available")
+    if (outcome.state === "available") {
+      expect(outcome.planType).toBe("plus")
+      expect("planType" in outcome.windows[0]).toBe(false)
     }
   })
 })
@@ -408,11 +500,11 @@ describe("reduceWeeklyWindow — window validation", () => {
 describe("reduceWeeklyWindow — weekly selection", () => {
   test("weekly window wins by duration whether primary or secondary (not position)", () => {
     const asPrimary = reduceWeeklyWindow(
-      { rate_limit: { primary_window: weeklyReport(), secondary_window: sessionReport() } },
+      { rate_limit: { primary_window: weeklyReport(), secondary_window: fiveHourReport() } },
       NOW,
     )
     const asSecondary = reduceWeeklyWindow(
-      { rate_limit: { primary_window: sessionReport(), secondary_window: weeklyReport() } },
+      { rate_limit: { primary_window: fiveHourReport(), secondary_window: weeklyReport() } },
       NOW,
     )
     expect(asPrimary?.limitWindowSeconds).toBe(WEEK_LENGTH_SECONDS)
@@ -463,14 +555,16 @@ describe("reduceWeeklyWindow — weekly selection", () => {
     }
   })
 
-  test("no weekly window when every window declares a non-weekly duration", () => {
+  test("no weekly window when nothing matches the weekly band or the fallback", () => {
+    // Out of both bands → nothing recognizable at all.
     expect(
       reduceWeeklyWindow(
-        { rate_limit: { primary_window: sessionReport(), secondary_window: sessionReport() } },
+        { rate_limit: { primary_window: outOfBandReport(2 * 60 * 60), secondary_window: outOfBandReport(2 * 60 * 60) } },
         NOW,
       ),
     ).toBeNull()
-    expect(reduceWeeklyWindow({ rate_limit: { primary_window: sessionReport() } }, NOW)).toBeNull()
+    // Five-hour windows are real windows — but they are not weekly.
+    expect(reduceWeeklyWindow({ rate_limit: { primary_window: fiveHourReport() } }, NOW)).toBeNull()
     expect(reduceWeeklyWindow({ rate_limit: {} }, NOW)).toBeNull()
     expect(reduceWeeklyWindow({}, NOW)).toBeNull()
     expect(reduceWeeklyWindow({ rate_limit: null }, NOW)).toBeNull()
@@ -489,19 +583,183 @@ describe("reduceWeeklyWindow — weekly selection", () => {
 
   test("a duration-less window wins over an out-of-band duration", () => {
     const mixed = reduceWeeklyWindow(
-      { rate_limit: { primary_window: sessionReport(), secondary_window: weeklyReport({ limit_window_seconds: undefined }) } },
+      { rate_limit: { primary_window: outOfBandReport(2 * 60 * 60), secondary_window: weeklyReport({ limit_window_seconds: undefined }) } },
       NOW,
     )
     expect(mixed?.limitWindowSeconds).toBeUndefined()
   })
+})
 
+describe("reduceUsageWindows — window kinds and order", () => {
+  test("weekly only → a single weekly window", () => {
+    const reduction = reduceUsageWindows({ rate_limit: { primary_window: weeklyReport() } }, NOW)
+    expect(reduction?.windows.map((w) => w.kind)).toEqual(["weekly"])
+    expect(reduction?.windows[0].remaining).toBe(35)
+    expect(reduction?.windows[0].limitWindowSeconds).toBe(WEEK_LENGTH_SECONDS)
+  })
+
+  test("five-hour only → a single five-hour window", () => {
+    const reduction = reduceUsageWindows({ rate_limit: { primary_window: fiveHourReport() } }, NOW)
+    expect(reduction?.windows.map((w) => w.kind)).toEqual(["five-hour"])
+    expect(reduction?.windows[0].remaining).toBe(80)
+    expect(reduction?.windows[0].limitWindowSeconds).toBe(FIVE_HOUR_LENGTH_SECONDS)
+  })
+
+  test("both kinds → five-hour first, weekly second, regardless of slot position", () => {
+    const weekly = weeklyReport()
+    const fiveHour = fiveHourReport()
+    const asPrimary = reduceUsageWindows(
+      { rate_limit: { primary_window: weekly, secondary_window: fiveHour } },
+      NOW,
+    )
+    const asSecondary = reduceUsageWindows(
+      { rate_limit: { primary_window: fiveHour, secondary_window: weekly } },
+      NOW,
+    )
+    expect(asPrimary?.windows.map((w) => w.kind)).toEqual(["five-hour", "weekly"])
+    expect(asSecondary?.windows.map((w) => w.kind)).toEqual(["five-hour", "weekly"])
+    expect(asPrimary?.windows[0].usedPercent).toBe(20) // five-hour slot values
+    expect(asPrimary?.windows[1].usedPercent).toBe(65) // weekly slot values
+  })
+
+  test("only the best window of each kind is kept", () => {
+    // Two in-band five-hour candidates → the closer-to-5 h one survives.
+    const fourHours = fiveHourReport({ limit_window_seconds: 4 * 60 * 60 })
+    const sixHours = fiveHourReport({ limit_window_seconds: 6 * 60 * 60 })
+    const fiveHourOnly = reduceUsageWindows(
+      { rate_limit: { primary_window: fourHours, secondary_window: sixHours } },
+      NOW,
+    )
+    expect(fiveHourOnly?.windows.map((w) => w.kind)).toEqual(["five-hour"])
+    // Two in-band weekly candidates → the closer-to-7 d one survives.
+    const sixDays = weeklyReport({ limit_window_seconds: 6 * 24 * 60 * 60 })
+    const eightDays = weeklyReport({ limit_window_seconds: 8 * 24 * 60 * 60 })
+    const weeklyOnly = reduceUsageWindows(
+      { rate_limit: { primary_window: sixDays, secondary_window: eightDays } },
+      NOW,
+    )
+    expect(weeklyOnly?.windows.map((w) => w.kind)).toEqual(["weekly"])
+  })
+
+  test("five-hour selection: closest to 5 h wins inside the 3–7 h band", () => {
+    const threeHours = fiveHourReport({ limit_window_seconds: 3 * 60 * 60 })
+    const sixHours = fiveHourReport({ limit_window_seconds: 6 * 60 * 60 })
+    const reduction = reduceUsageWindows(
+      { rate_limit: { primary_window: threeHours, secondary_window: sixHours } },
+      NOW,
+    )
+    expect(reduction?.windows[0].limitWindowSeconds).toBe(6 * 60 * 60)
+  })
+
+  test("five-hour ties keep the primary slot", () => {
+    const fourHours = fiveHourReport({ limit_window_seconds: 4 * 60 * 60 })
+    const sixHours = fiveHourReport({ limit_window_seconds: 6 * 60 * 60 })
+    const reduction = reduceUsageWindows(
+      { rate_limit: { primary_window: fourHours, secondary_window: sixHours } },
+      NOW,
+    )
+    expect(reduction?.windows[0].limitWindowSeconds).toBe(4 * 60 * 60)
+  })
+
+  test("five-hour band edges are accepted; just-outside durations are not", () => {
+    const atMin = reduceUsageWindows(
+      { rate_limit: { primary_window: fiveHourReport({ limit_window_seconds: FIVE_HOUR_BAND_MIN_SECONDS }) } },
+      NOW,
+    )
+    expect(atMin?.windows[0].limitWindowSeconds).toBe(FIVE_HOUR_BAND_MIN_SECONDS)
+
+    const atMax = reduceUsageWindows(
+      { rate_limit: { primary_window: fiveHourReport({ limit_window_seconds: FIVE_HOUR_BAND_MAX_SECONDS }) } },
+      NOW,
+    )
+    expect(atMax?.windows[0].limitWindowSeconds).toBe(FIVE_HOUR_BAND_MAX_SECONDS)
+
+    for (const duration of [FIVE_HOUR_BAND_MIN_SECONDS - 1, FIVE_HOUR_BAND_MAX_SECONDS + 1]) {
+      const reduction = reduceUsageWindows(
+        { rate_limit: { primary_window: fiveHourReport({ limit_window_seconds: duration }) } },
+        NOW,
+      )
+      // Single out-of-band slot → nothing recognizable at all (no fallback:
+      // the window declared a duration), so the reduction is null.
+      expect(reduction).toBeNull()
+    }
+  })
+
+  test("no recognizable window → null", () => {
+    expect(
+      reduceUsageWindows(
+        { rate_limit: { primary_window: outOfBandReport(2 * 60 * 60) } },
+        NOW,
+      ),
+    ).toBeNull()
+    expect(
+      reduceUsageWindows(
+        { rate_limit: { primary_window: outOfBandReport(20 * 24 * 60 * 60), secondary_window: outOfBandReport(2 * 60 * 60) } },
+        NOW,
+      ),
+    ).toBeNull()
+    expect(reduceUsageWindows({ rate_limit: {} }, NOW)).toBeNull()
+    expect(reduceUsageWindows({}, NOW)).toBeNull()
+    expect(reduceUsageWindows({ rate_limit: null }, NOW)).toBeNull()
+    expect(reduceUsageWindows(null, NOW)).toBeNull()
+  })
+})
+
+describe("reduceUsageWindows — duration-less fallback", () => {
+  test("duration-less slots fall back by position, preferring secondary, as one weekly window", () => {
+    const primary = weeklyReport({ limit_window_seconds: undefined, reset_at: 5_000 })
+    const secondary = weeklyReport({ limit_window_seconds: undefined, reset_at: 9_000 })
+    const both = reduceUsageWindows({ rate_limit: { primary_window: primary, secondary_window: secondary } }, NOW)
+    expect(both?.windows.map((w) => w.kind)).toEqual(["weekly"])
+    expect(both?.windows[0].resetsAt).toBe(9_000 * 1000)
+
+    const primaryOnly = reduceUsageWindows({ rate_limit: { primary_window: primary } }, NOW)
+    expect(primaryOnly?.windows[0].resetsAt).toBe(5_000 * 1000)
+  })
+
+  test("the fallback is never duplicated into a five-hour window", () => {
+    const reduction = reduceUsageWindows(
+      { rate_limit: { primary_window: weeklyReport({ limit_window_seconds: undefined }) } },
+      NOW,
+    )
+    expect(reduction?.windows.map((w) => w.kind)).toEqual(["weekly"])
+  })
+
+  test("a duration-less window wins over an out-of-both-bands duration", () => {
+    const mixed = reduceUsageWindows(
+      { rate_limit: { primary_window: outOfBandReport(2 * 60 * 60), secondary_window: weeklyReport({ limit_window_seconds: undefined }) } },
+      NOW,
+    )
+    expect(mixed?.windows.map((w) => w.kind)).toEqual(["weekly"])
+    expect(mixed?.windows[0].limitWindowSeconds).toBeUndefined()
+  })
+
+  test("a recognized five-hour window wins over a duration-less secondary", () => {
+    const mixed = reduceUsageWindows(
+      { rate_limit: { primary_window: fiveHourReport(), secondary_window: weeklyReport({ limit_window_seconds: undefined }) } },
+      NOW,
+    )
+    expect(mixed?.windows.map((w) => w.kind)).toEqual(["five-hour"])
+  })
+})
+
+describe("reduceUsageWindows — plan type at the reduction level", () => {
   test("plan_type is attached raw when non-blank, omitted otherwise", () => {
     const base = { rate_limit: { primary_window: weeklyReport() } }
-    expect(reduceWeeklyWindow({ ...base, plan_type: "plus" }, NOW)?.planType).toBe("plus")
-    expect(reduceWeeklyWindow({ ...base, plan_type: "  plus  " }, NOW)?.planType).toBe("  plus  ")
+    expect(reduceUsageWindows({ ...base, plan_type: "plus" }, NOW)?.planType).toBe("plus")
+    expect(reduceUsageWindows({ ...base, plan_type: "  plus  " }, NOW)?.planType).toBe("  plus  ")
     for (const plan_type of ["", "   ", null, 42]) {
-      expect(reduceWeeklyWindow({ ...base, plan_type: plan_type as never }, NOW)?.planType).toBeUndefined()
+      expect(reduceUsageWindows({ ...base, plan_type: plan_type as never }, NOW)?.planType).toBeUndefined()
     }
+  })
+
+  test("the plan label never lands on individual windows", () => {
+    const reduction = reduceUsageWindows(
+      { plan_type: "plus", rate_limit: { primary_window: weeklyReport() } },
+      NOW,
+    )
+    expect(reduction?.planType).toBe("plus")
+    expect("planType" in reduction!.windows[0]).toBe(false)
   })
 })
 

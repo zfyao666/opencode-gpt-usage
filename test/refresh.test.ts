@@ -9,24 +9,33 @@ import type { UsageSnapshot } from "../src/types"
 
 const NOW = Date.UTC(2026, 7, 24, 12, 0, 0)
 
-const available = (
-  over: Partial<UsageSnapshot> = {},
-): Extract<UsageOutcome, { state: "available" }> => ({
-  state: "available",
-  weekly: {
+const WINDOWS = [
+  {
+    kind: "five-hour" as const,
+    usedPercent: 20,
+    remaining: 80,
+    resetsAt: NOW + 3_600_000,
+    limitWindowSeconds: 5 * 60 * 60,
+  },
+  {
+    kind: "weekly" as const,
     usedPercent: 65,
     remaining: 35,
     resetsAt: NOW + 86_400_000,
     limitWindowSeconds: 7 * 24 * 60 * 60,
   },
+]
+
+const available = (
+  over: Partial<Extract<UsageOutcome, { state: "available" }>> = {},
+): Extract<UsageOutcome, { state: "available" }> => ({
+  state: "available",
+  windows: WINDOWS,
   ...over,
 })
 
 const snapshot = (over: Partial<UsageSnapshot> = {}): UsageSnapshot => ({
-  usedPercent: 65,
-  remaining: 35,
-  resetsAt: NOW + 86_400_000,
-  limitWindowSeconds: 7 * 24 * 60 * 60,
+  windows: WINDOWS,
   fetchedAt: NOW - 60_000,
   ...over,
 })
@@ -49,15 +58,15 @@ describe("outcomeToFailure — UI result → failure mapping", () => {
       kind: "network",
       message: "network error — retrying",
     })
-    expect(outcomeToFailure({ state: "invalid-or-no-weekly" })).toEqual({
+    expect(outcomeToFailure({ state: "invalid-or-no-window" })).toEqual({
       kind: "no-window",
-      message: "no weekly usage window from API",
+      message: "no usage window from API",
     })
   })
 })
 
 describe("planRefresh — success path", () => {
-  test("available → fresh data snapshot, poll delay, backoff reset", () => {
+  test("available → fresh data snapshot with windows, poll delay, backoff reset", () => {
     const plan = planRefresh({
       outcome: available(),
       previous: snapshot(),
@@ -66,10 +75,23 @@ describe("planRefresh — success path", () => {
       backoffDelayMs: 40_000,
     })
     expect(plan).toEqual({
-      view: { kind: "data", snapshot: { ...available().weekly, fetchedAt: NOW } },
+      view: { kind: "data", snapshot: { windows: available().windows, fetchedAt: NOW } },
       nextDelayMs: 120_000,
       backoffReset: true,
     })
+  })
+
+  test("plan type from the outcome lands on the snapshot, never on a window", () => {
+    const plan = planRefresh({
+      outcome: available({ planType: "plus" }),
+      previous: undefined,
+      now: NOW,
+      pollMs: 120_000,
+      backoffDelayMs: 40_000,
+    })
+    if (plan.view.kind !== "data") throw new Error("expected data view")
+    expect(plan.view.snapshot.planType).toBe("plus")
+    expect("planType" in plan.view.snapshot.windows[0]).toBe(false)
   })
 })
 
@@ -108,7 +130,7 @@ describe("planRefresh — failure paths", () => {
     expect(plan.backoffReset).toBe(false)
     expect(plan.nextDelayMs).toBe(20_000)
     if (plan.view.kind !== "data") throw new Error("expected stale data view")
-    expect(plan.view.snapshot.usedPercent).toBe(previous.usedPercent)
+    expect(plan.view.snapshot.windows).toEqual(previous.windows)
     expect(plan.view.snapshot.fetchedAt).toBe(previous.fetchedAt)
     expect(plan.view.snapshot.refreshError).toEqual({
       kind: "http",
@@ -129,7 +151,7 @@ describe("planRefresh — failure paths", () => {
     expect(network.view.error.message).toBe("network error — retrying")
 
     const noWindow = planRefresh({
-      outcome: { state: "invalid-or-no-weekly" },
+      outcome: { state: "invalid-or-no-window" },
       previous: undefined,
       now: NOW,
       pollMs: 120_000,
@@ -137,7 +159,7 @@ describe("planRefresh — failure paths", () => {
     })
     if (noWindow.view.kind !== "error") throw new Error("expected error view")
     expect(noWindow.view.error.kind).toBe("no-window")
-    expect(noWindow.view.error.message).toBe("no weekly usage window from API")
+    expect(noWindow.view.error.message).toBe("no usage window from API")
   })
 })
 

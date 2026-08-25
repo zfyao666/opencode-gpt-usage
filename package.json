@@ -1,6 +1,6 @@
 {
   "name": "@bruceyao241/opencode-gpt-usage",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "ChatGPT (Codex) weekly quota card for the opencode TUI right sidebar — WEEKLY ▓▓▓▓▓▓▓░░░ 70% left · resets 14:30.",
   "type": "module",
   "license": "MIT",
@@ -37,7 +37,9 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "bun run build.ts && tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",

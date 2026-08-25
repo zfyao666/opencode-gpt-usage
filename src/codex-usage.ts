@@ -14,18 +14,21 @@
  * state). The bearer token appears only in the outgoing Authorization
  * header and in no returned value.
  *
- * Weekly-window reduction (`reduceWeeklyWindow`) selects the best window in
- * a single pass over the two rate-limit slots: the in-band window closest
- * to seven days wins (ties keep the primary slot); failing that, the last
- * duration-less slot (the secondary, when both are duration-less) is the
- * fallback; out-of-band durations are never selectable. A successful but
- * unusable payload — null, primitive, array, `{}`, no weekly window — is an
- * ordinary "invalid-or-no-weekly" outcome, never a rejected refresh.
+ * Window reduction (`reduceUsageWindows`) selects, in a single pass over
+ * the two rate-limit slots, the best window of each kind: a five-hour
+ * window is an in-band (3–7 h) duration closest to 5 h, a weekly window
+ * an in-band (3–14 d) duration closest to 7 d, and ties keep the primary
+ * slot. A kind with no in-band window is simply absent. The duration-less
+ * fallback is never duplicated across kinds: it is a single weekly
+ * compatibility window, used only when no window declared a usable
+ * duration. A successful but unusable payload — null, primitive, array,
+ * `{}`, no recognizable window — is an ordinary "invalid-or-no-window"
+ * outcome, never a rejected refresh.
  *
  * Protocol facts (endpoint URL, header names, GET, timeout, status
  * handling) are literal.
  */
-import type { WeeklyWindow } from "./types"
+import type { UsageWindow, UsageWindowKind, WeeklyWindow } from "./types"
 import { readFile } from "node:fs/promises"
 
 /** ChatGPT/Codex usage status endpoint. */
@@ -33,6 +36,12 @@ export const USAGE_ENDPOINT_URL = "https://chatgpt.com/backend-api/wham/usage"
 
 /** How long a status request may take before it is aborted. */
 export const USAGE_TIMEOUT_MS = 10_000
+
+/** The real Codex five-hour window length (5 h, in seconds). */
+export const FIVE_HOUR_LENGTH_SECONDS = 5 * 60 * 60
+/** A window counts as five-hour only inside this band (3–7 h). */
+export const FIVE_HOUR_BAND_MIN_SECONDS = 3 * 60 * 60
+export const FIVE_HOUR_BAND_MAX_SECONDS = 7 * 60 * 60
 
 /** The real Codex weekly window length (7 days, in seconds). */
 export const WEEK_LENGTH_SECONDS = 7 * 24 * 60 * 60
@@ -42,12 +51,20 @@ export const WEEK_BAND_MAX_SECONDS = 14 * 24 * 60 * 60
 
 /** UI-facing result of one refresh attempt. No raw errors, no raw messages. */
 export type UsageOutcome =
-  | { state: "available"; weekly: WeeklyWindow }
+  | { state: "available"; windows: UsageWindow[]; planType?: string }
   | { state: "login-required" }
   | { state: "unauthorized" }
   | { state: "http"; status: number }
   | { state: "network" }
-  | { state: "invalid-or-no-weekly" }
+  | { state: "invalid-or-no-window" }
+
+/** Result of one payload reduction: recognized windows + the plan label. */
+export type UsageReduction = {
+  /** Recognized quota windows, ordered five-hour first, then weekly. */
+  windows: UsageWindow[]
+  /** Raw WHAM plan_type ("plus", "pro", …), when the API reported one. */
+  planType?: string
+}
 
 export type UsageSourceOptions = {
   credentialsPath: string
@@ -167,7 +184,7 @@ async function fetchStatus(input: {
 }
 
 // ---------------------------------------------------------------------------
-// Weekly-window reduction (one pass, no intermediate collections)
+// Window reduction (one pass, no intermediate collections)
 // ---------------------------------------------------------------------------
 
 type Candidate = {
@@ -190,15 +207,6 @@ function resetMoment(record: Record<string, unknown>, now: number): number | nul
     return Number.isFinite(ms) && ms > 0 ? ms : null
   }
   return null
-}
-
-/** Type guard: the candidate declares a duration inside the weekly band. */
-function isWeeklyBand(candidate: Candidate): candidate is Candidate & { duration: number } {
-  return (
-    candidate.duration !== undefined &&
-    candidate.duration >= WEEK_BAND_MIN_SECONDS &&
-    candidate.duration <= WEEK_BAND_MAX_SECONDS
-  )
 }
 
 /** Validate one raw window slot; null when not a usable window. */
@@ -225,15 +233,58 @@ export function shareRemaining(usedPercent: unknown): number {
 }
 
 /**
- * Reduce an untrusted usage payload to the weekly quota window, if any.
- *
- * Selection in one pass over the primary/secondary slots: the in-band
- * (3–14 day) window closest to exactly 7 days wins, ties keeping the
- * primary slot; if nothing is in band, the last duration-less slot wins
- * (secondary preferred); windows declaring an out-of-band duration are
- * never selectable. The plan label is attached raw when non-blank.
+ * Best in-band window of one kind, single pass over the two slots: the
+ * window closest to `targetSeconds` wins; strict improvement keeps the
+ * primary slot on ties; windows declaring an out-of-band duration are
+ * never selectable.
  */
-export function reduceWeeklyWindow(payload: unknown, now: number): WeeklyWindow | null {
+function bestInBand(
+  primary: Candidate | null,
+  secondary: Candidate | null,
+  minSeconds: number,
+  maxSeconds: number,
+  targetSeconds: number,
+): Candidate | null {
+  let best: Candidate | null = null
+  let bestDistance = Number.POSITIVE_INFINITY
+  for (const slot of [primary, secondary]) {
+    if (slot === null) continue
+    const duration = slot.duration
+    if (duration === undefined || duration < minSeconds || duration > maxSeconds) continue
+    const distance = Math.abs(duration - targetSeconds)
+    if (best === null || distance < bestDistance) {
+      best = slot
+      bestDistance = distance
+    }
+  }
+  return best
+}
+
+/** Wrap a candidate into a public window of the given kind. */
+function windowOf(candidate: Candidate, kind: UsageWindowKind): UsageWindow {
+  const window: UsageWindow = {
+    kind,
+    usedPercent: candidate.used,
+    remaining: shareRemaining(candidate.used),
+    resetsAt: candidate.resetsAt,
+  }
+  if (candidate.duration !== undefined) window.limitWindowSeconds = candidate.duration
+  return window
+}
+
+/**
+ * Reduce an untrusted usage payload to the recognized quota windows, if
+ * any. Each kind keeps only its single best in-band window — five-hour
+ * durations (3–7 h) closest to 5 h, weekly durations (3–14 d) closest to
+ * 7 d, ties keeping the primary slot — and the recognized windows come
+ * back in fixed order, five-hour first then weekly, so the UI can render
+ * one entry per present kind. The duration-less fallback is NOT
+ * duplicated across kinds: it is a single weekly compatibility window,
+ * used only when no window declared a usable (in-band) duration, with
+ * the secondary slot preferred. The plan label rides at the reduction
+ * level, not per window.
+ */
+export function reduceUsageWindows(payload: unknown, now: number): UsageReduction | null {
   const root = recordOf(payload)
   if (!root) return null
   const envelope = recordOf(root.rate_limit)
@@ -242,40 +293,52 @@ export function reduceWeeklyWindow(payload: unknown, now: number): WeeklyWindow 
   const primary = windowCandidate(envelope.primary_window, now)
   const secondary = windowCandidate(envelope.secondary_window, now)
 
-  // Single pass over the two slots, explicit sequential state (no
-  // collections): in-band window closest to 7 days wins; strict
-  // improvement keeps the primary slot on ties; windows declaring an
-  // out-of-band duration are never selectable.
-  let best: Candidate | null = null
-  let bestDistance = Number.POSITIVE_INFINITY
-  if (primary !== null && isWeeklyBand(primary)) {
-    best = primary
-    bestDistance = Math.abs(primary.duration - WEEK_LENGTH_SECONDS)
-  }
-  if (secondary !== null && isWeeklyBand(secondary)) {
-    const distance = Math.abs(secondary.duration - WEEK_LENGTH_SECONDS)
-    if (best === null || distance < bestDistance) {
-      best = secondary
-      bestDistance = distance
-    }
+  const fiveHour = bestInBand(
+    primary,
+    secondary,
+    FIVE_HOUR_BAND_MIN_SECONDS,
+    FIVE_HOUR_BAND_MAX_SECONDS,
+    FIVE_HOUR_LENGTH_SECONDS,
+  )
+  const weekly = bestInBand(
+    primary,
+    secondary,
+    WEEK_BAND_MIN_SECONDS,
+    WEEK_BAND_MAX_SECONDS,
+    WEEK_LENGTH_SECONDS,
+  )
+
+  const windows: UsageWindow[] = []
+  if (fiveHour !== null) windows.push(windowOf(fiveHour, "five-hour"))
+  if (weekly !== null) windows.push(windowOf(weekly, "weekly"))
+
+  if (windows.length === 0) {
+    // Single weekly compatibility fallback: last duration-less slot wins
+    // (secondary preferred); duration-less means the window declared no
+    // usable duration. Never duplicated into a second kind.
+    const fallback =
+      (secondary !== null && secondary.duration === undefined ? secondary : null) ??
+      (primary !== null && primary.duration === undefined ? primary : null)
+    if (fallback === null) return null
+    windows.push(windowOf(fallback, "weekly"))
   }
 
-  const winner =
-    best ??
-    // Duration-less fallback: last duration-less slot wins (secondary
-    // preferred); duration-less means the window declared no usable one.
-    (secondary !== null && secondary.duration === undefined ? secondary : null) ??
-    (primary !== null && primary.duration === undefined ? primary : null)
-  if (winner === null) return null
-
-  const weekly: WeeklyWindow = {
-    usedPercent: winner.used,
-    remaining: shareRemaining(winner.used),
-    resetsAt: winner.resetsAt,
-    limitWindowSeconds: winner.duration,
-  }
   const plan = nonBlankText(root.plan_type)
-  return plan ? { ...weekly, planType: plan } : weekly
+  return plan === null ? { windows } : { windows, planType: plan }
+}
+
+/**
+ * Weekly-only compatibility view of `reduceUsageWindows`: the single
+ * weekly window of the reduction, if any. Kept so callers that reason
+ * about the weekly quota alone keep working unchanged.
+ */
+export function reduceWeeklyWindow(payload: unknown, now: number): WeeklyWindow | null {
+  const reduction = reduceUsageWindows(payload, now)
+  if (reduction === null) return null
+  const weekly = reduction.windows.find(
+    (window): window is WeeklyWindow => window.kind === "weekly",
+  )
+  return weekly === undefined ? null : weekly
 }
 
 // ---------------------------------------------------------------------------
@@ -304,8 +367,10 @@ export async function collectUsageOutcome(opts: UsageSourceOptions): Promise<Usa
     return { state: "network" }
   }
 
-  const weekly = reduceWeeklyWindow(reply.body, opts.now ?? Date.now())
-  return weekly === null
-    ? { state: "invalid-or-no-weekly" }
-    : { state: "available", weekly }
+  const reduction = reduceUsageWindows(reply.body, opts.now ?? Date.now())
+  if (reduction === null) return { state: "invalid-or-no-window" }
+  const outcome: UsageOutcome = { state: "available", windows: reduction.windows }
+  return reduction.planType !== undefined
+    ? { ...outcome, planType: reduction.planType }
+    : outcome
 }

@@ -3,22 +3,28 @@
  * TUI right sidebar (`sidebar_content` slot).
  *
  * Reads `~/.codex/auth.json` (`tokens.access_token`, `tokens.account_id`)
- * and asks `chatgpt.com/backend-api/wham/usage` for the ~7-day weekly
- * window (selected by `limit_window_seconds`, never just position).
+ * and asks `chatgpt.com/backend-api/wham/usage` for the quota windows
+ * (5-hour and ~7-day weekly, selected by `limit_window_seconds`, never
+ * just position).
  *
- *   ┌ OpenCode GPT Usage ───────┐
- *   │ ● ChatGPT Plus               │
- *   │ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░ 70%  │
- *   │ ● started 2026-08-21 02:20   │
- *   │ ● resets  2026-08-28 02:20   │
- *   └─────────────────────────────┘
+ *   ┌ OpenCode GPT Usage ─────────┐
+ *   │ ● ChatGPT Plus                 │
+ *   │ 5h ▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░ 70%     │
+ *   │    ● resets  2026-08-26 07:20  │
+ *   │ 7d ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░ 85%     │
+ *   │    ● started 2026-08-21 02:20  │
+ *   │    ● resets  2026-08-28 02:20  │
+ *   └───────────────────────────────┘
  *
- * Detail rows (plan / started / bulleted resets) appear only when the
- * measured content width fits them (DETAIL_MIN_WIDTH); narrower cards
- * keep just the actionable reset footer so the percentage is never
- * crowded out. The started row exists only when the API reported a
- * real window duration — a position-fallback window has no honest
- * start and renders nothing.
+ * One bar per usage window in the snapshot (5h and/or weekly), each with
+ * its own compact kind label, remaining %, health color and reset time.
+ * With a single window the label still names the period. Detail rows
+ * (plan / started / bulleted resets) appear only when the measured
+ * content width fits them (DETAIL_MIN_WIDTH); narrower cards keep just
+ * the actionable reset footer so the percentage is never crowded out.
+ * The started row exists only when the API reported a real window
+ * duration — a position-fallback window has no honest start and renders
+ * nothing.
  *
  * The bar adapts to the real sidebar width: the slot API exposes no
  * width, so the card measures its own content box (a `BoxRenderable`
@@ -73,6 +79,14 @@ import type { ViewState } from "./types"
 
 /** Fixed initial retry delay — not configurable; only the cap is. */
 const RETRY_BASE_MS = 10_000
+
+/**
+ * Compact per-window bar labels: "5h" / "7d". Short English tags match
+ * the existing UI language and stay readable in narrow sidebars; unknown
+ * kinds fall back to their raw name so nothing renders unlabeled.
+ */
+const WINDOW_KIND_LABELS: Record<string, string> = { "five-hour": "5h", weekly: "7d" }
+const windowLabel = (kind: string): string => WINDOW_KIND_LABELS[kind] ?? kind
 
 const tui: TuiPlugin = async (api) => {
   // Read + validate the config file once, before anything else runs. Any
@@ -184,35 +198,36 @@ const tui: TuiPlugin = async (api) => {
         const stale = staleness(snap, t, cfg.staleMs) === "stale"
         const retryIn = snap.refreshError ? secondsUntil(snap.refreshError.retryAt, t) : 0
 
-        const pctLabel = `${snap.remaining}%`
         const plan = friendlyPlanName(snap.planType)
-        const start = periodStart(snap.resetsAt, snap.limitWindowSeconds)
         // Detail bullet rows (plan / started / bulleted resets) only when
         // the measured width fits them; narrower cards stay lean.
         const showDetails = measuredWidth >= DETAIL_MIN_WIDTH
-        const layout = layoutBar(measuredWidth, pctLabel)
-        const bar = formatBar(snap.remaining, layout.barWidth)
-        const barColor = stale
-          ? theme().textMuted
-          : snap.remaining >= 50
-            ? theme().success
-            : snap.remaining >= 15
-              ? theme().warning
-              : theme().error
-        const reset = formatResetLocal(snap.resetsAt)
+
+        const windows = snap.windows
+        const maxLabel = windows.reduce((n, w) => Math.max(n, windowLabel(w.kind).length), 0)
+        const labelCells = maxLabel + 1 // kind label + the flex gap before the bar
+        const widestPct = windows.reduce((n, w) => Math.max(n, `${w.remaining}%`.length), 0)
+        // One SHARED layout for every bar: the widest pct label decides
+        // inline/stacked and the kind-label column is reserved up front
+        // (layoutBar only reads pctLabel.length, hence the placeholder),
+        // so all bars get the same width and the rows stay aligned.
+        const layout = layoutBar(measuredWidth - labelCells, "0".repeat(widestPct))
         const staleSuffix = stale
           ? ` · stale ${formatAge(t - snap.fetchedAt)}` + (retryIn > 0 ? ` · retry ${retryIn}s` : "")
           : ""
         // Color hierarchy: fresh quota/period VALUES use normal readable
         // text; bullets and labels stay muted secondary affordances (via
         // spans). When stale, everything informational drops to muted so
-        // nothing reads as fresh, and the resets row carries an explicit
-        // warning-colored stale marker. `resets` is padded to align its
-        // timestamp with `started`.
+        // nothing reads as fresh, and the LAST resets row carries the
+        // explicit warning-colored stale marker. Each window gets its own
+        // health color from its own remaining; `resets` is padded to
+        // align its timestamp with `started`.
         const valueColor = stale ? theme().textMuted : theme().text
         const labelColor = theme().textMuted
-        const resetsLabel = showDetails ? "● resets  " : "resets "
-        const stackedPrefix = !showDetails && layout.mode === "stacked" ? `${pctLabel} · ` : null
+        const healthColor = (remaining: number) =>
+          remaining >= 50 ? theme().success : remaining >= 15 ? theme().warning : theme().error
+        // Indent detail rows so the bullets sit directly under the bar.
+        const indent = " ".repeat(labelCells)
 
         return (
           <box border borderColor={stale ? theme().warning : theme().border} paddingX={1} width="100%">
@@ -236,27 +251,52 @@ const tui: TuiPlugin = async (api) => {
                   {plan}
                 </text>
               ) : null}
-              <box flexDirection="row" gap={1} alignItems="center" minWidth={0}>
-                <text fg={barColor}>{bar}</text>
-                {layout.mode === "inline" ? (
-                  <text fg={stale ? theme().textMuted : theme().text}>{pctLabel}</text>
-                ) : null}
-              </box>
-              {showDetails && start !== null ? (
-                // marginTop: slight vertical separation between the bar
-                // and the period detail rows — a local nudge only, no
-                // container gap changes.
-                <text fg={valueColor} wrapMode="none" truncate marginTop={1}>
-                  <span {...{ style: { fg: labelColor } }}>{"● started "}</span>
-                  {formatResetLocal(start)}
-                </text>
-              ) : null}
-              <text fg={valueColor} wrapMode="none" truncate>
-                {stackedPrefix ? <span {...{ style: { fg: valueColor } }}>{stackedPrefix}</span> : null}
-                <span {...{ style: { fg: labelColor } }}>{resetsLabel}</span>
-                {reset}
-                {stale ? <span {...{ style: { fg: theme().warning } }}>{staleSuffix}</span> : null}
-              </text>
+              {windows.map((w, i) => {
+                const label = windowLabel(w.kind).padEnd(maxLabel)
+                const pctLabel = `${w.remaining}%`
+                const bar = formatBar(w.remaining, layout.barWidth)
+                const barColor = stale ? theme().textMuted : healthColor(w.remaining)
+                const start = periodStart(w.resetsAt, w.limitWindowSeconds)
+                // Stacked (narrow) bars keep the bar on its own full row
+                // and move the percentage onto the reset footer.
+                const stackedPrefix =
+                  !showDetails && layout.mode === "stacked" ? `${pctLabel} · ` : null
+                const resetsLabel = showDetails ? `${indent}● resets  ` : "resets "
+                return (
+                  // marginTop on follow-up windows: a one-row breather so
+                  // two blocks never read as one crowded stack.
+                  <box flexDirection="column" minWidth={0} marginTop={i > 0 ? 1 : 0}>
+                    <box flexDirection="row" gap={1} alignItems="center" minWidth={0}>
+                      <text fg={labelColor} wrapMode="none">
+                        {label}
+                      </text>
+                      <text fg={barColor}>{bar}</text>
+                      {layout.mode === "inline" ? (
+                        <text fg={stale ? theme().textMuted : theme().text}>{pctLabel}</text>
+                      ) : null}
+                    </box>
+                    {showDetails && start !== null ? (
+                      // marginTop (first window only): slight separation
+                      // between the bar and the period detail rows — a
+                      // local nudge only, no container gap changes.
+                      <text fg={valueColor} wrapMode="none" truncate marginTop={i === 0 ? 1 : 0}>
+                        <span {...{ style: { fg: labelColor } }}>{`${indent}● started `}</span>
+                        {formatResetLocal(start)}
+                      </text>
+                    ) : null}
+                    <text fg={valueColor} wrapMode="none" truncate>
+                      {stackedPrefix ? (
+                        <span {...{ style: { fg: valueColor } }}>{stackedPrefix}</span>
+                      ) : null}
+                      <span {...{ style: { fg: labelColor } }}>{resetsLabel}</span>
+                      {formatResetLocal(w.resetsAt)}
+                      {stale && i === windows.length - 1 ? (
+                        <span {...{ style: { fg: theme().warning } }}>{staleSuffix}</span>
+                      ) : null}
+                    </text>
+                  </box>
+                )
+              })}
             </box>
           </box>
         )

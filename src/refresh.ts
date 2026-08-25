@@ -40,8 +40,8 @@ export function outcomeToFailure(
       return { kind: "http", message: `usage endpoint error (HTTP ${outcome.status})` }
     case "network":
       return { kind: "network", message: "network error — retrying" }
-    case "invalid-or-no-weekly":
-      return { kind: "no-window", message: "no weekly usage window from API" }
+    case "invalid-or-no-window":
+      return { kind: "no-window", message: "no usage window from API" }
   }
 }
 
@@ -57,7 +57,16 @@ export function outcomeToFailure(
 export function planRefresh(input: RefreshInput): RefreshPlan {
   if (input.outcome.state === "available") {
     return {
-      view: { kind: "data", snapshot: { ...input.outcome.weekly, fetchedAt: input.now } },
+      view: {
+        kind: "data",
+        snapshot: {
+          windows: input.outcome.windows,
+          ...(input.outcome.planType !== undefined
+            ? { planType: input.outcome.planType }
+            : {}),
+          fetchedAt: input.now,
+        },
+      },
       nextDelayMs: input.pollMs,
       backoffReset: true,
     }
