@@ -263,9 +263,11 @@ const tui: TuiPlugin = async (api) => {
                   !showDetails && layout.mode === "stacked" ? `${pctLabel} · ` : null
                 const resetsLabel = showDetails ? `${indent}● resets  ` : "resets "
                 return (
-                  // marginTop on follow-up windows: a one-row breather so
-                  // two blocks never read as one crowded stack.
-                  <box flexDirection="column" minWidth={0} marginTop={i > 0 ? 1 : 0}>
+                  // Module-level rhythm: one restrained blank row after
+                  // the title/plan header before the FIRST window block;
+                  // subsequent blocks sit flush (marginTop 0) so the gap
+                  // between modules stays tight.
+                  <box flexDirection="column" minWidth={0} marginTop={i === 0 ? 1 : 0}>
                     <box flexDirection="row" gap={1} alignItems="center" minWidth={0}>
                       <text fg={labelColor} wrapMode="none">
                         {label}
