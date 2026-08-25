@@ -1,9 +1,7 @@
 {
-  "extends": "./tsconfig.json",
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
-    "emitDeclarationOnly": false,
-    "declaration": false,
     "types": ["bun-types", "node"]
   },
   "include": ["src", "test"]

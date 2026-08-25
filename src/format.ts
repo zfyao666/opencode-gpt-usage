@@ -149,16 +149,18 @@ export type Staleness = "fresh" | "stale"
 
 /**
  * A snapshot is stale when a refresh has failed since it was captured, or
- * when its age exceeds the 15-minute threshold. Fresh data must never
- * silently masquerade as fresh when stale — callers render the stale
+ * when its age exceeds the stale threshold (default STALE_MS = 15 min; the
+ * TUI plugin may override it via the `staleMs` option). Fresh data must
+ * never silently masquerade as fresh when stale — callers render the stale
  * variant whenever this returns "stale".
  */
 export function staleness(
   snapshot: { fetchedAt: number; refreshError?: unknown },
   now: number,
+  staleMs: number = STALE_MS,
 ): Staleness {
   if (snapshot.refreshError) return "stale"
-  return now - snapshot.fetchedAt > STALE_MS ? "stale" : "fresh"
+  return now - snapshot.fetchedAt > staleMs ? "stale" : "fresh"
 }
 
 /** Whole seconds until a retry fires, never negative. */

@@ -89,4 +89,11 @@ describe("staleness", () => {
       "stale",
     )
   })
+
+  test("an explicit staleMs override replaces the 15-minute default", () => {
+    const snap = { fetchedAt: 1_000_000 }
+    expect(staleness(snap, snap.fetchedAt + 2 * 60_000, 60_000)).toBe("stale")
+    expect(staleness(snap, snap.fetchedAt + 30_000, 60_000)).toBe("fresh")
+    expect(staleness(snap, snap.fetchedAt + STALE_MS + 1, 3_600_000)).toBe("fresh")
+  })
 })

@@ -1,12 +1,23 @@
 {
   "name": "@zfyao666/opencode-gpt-usage",
   "version": "0.1.0",
-  "private": true,
   "description": "ChatGPT (Codex) weekly quota card for the opencode TUI right sidebar — WEEKLY ▓▓▓▓▓▓▓░░░ 70% left · resets 14:30.",
+  "private": true,
   "type": "module",
   "license": "MIT",
   "author": "zhufengyao <527936342@qq.com>",
-  "keywords": ["opencode", "tui", "plugin", "chatgpt", "codex", "gpt", "quota", "usage", "sidebar", "wham"],
+  "keywords": [
+    "opencode",
+    "tui",
+    "plugin",
+    "chatgpt",
+    "codex",
+    "gpt",
+    "quota",
+    "usage",
+    "sidebar",
+    "wham"
+  ],
   "homepage": "https://github.com/zfyao666/opencode-gpt-usage",
   "repository": {
     "type": "git",
@@ -15,6 +26,9 @@
   "bugs": {
     "url": "https://github.com/zfyao666/opencode-gpt-usage/issues"
   },
+  "engines": {
+    "opencode": ">=1.18"
+  },
   "exports": {
     "./tui": {
       "types": "./dist/index.d.ts",
@@ -22,13 +36,11 @@
     }
   },
   "files": ["dist"],
-  "engines": {
-    "opencode": ">=1.18"
-  },
   "scripts": {
-    "build": "bun run build.ts && tsc",
+    "build": "bun run build.ts && tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
     "test": "bun test",
+    "check": "bun run typecheck && bun test",
     "prepublishOnly": "bun run build"
   },
   "peerDependencies": {

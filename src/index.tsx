@@ -34,21 +34,30 @@
  * into its own measurement. Narrow slots stack the bar full-row and
  * move the percentage onto the footer.
  *
- * Fetches immediately, then every 120 s. Failures keep the last-good
- * snapshot but tag it stale (age > 15 min or failed refresh) — fresh data
- * never silently masquerades as fresh when stale. Failed refreshes retry
- * with bounded exponential backoff (10 s → 120 s max) and the card exposes
- * the error and the retry countdown. Auth errors tell the user to run
- * `codex login`; no OAuth refresh endpoint is invented. Tokens are only
- * ever sent to chatgpt.com and never logged.
+ * Fetches immediately, then every pollMs (default 120 s). Failures keep
+ * the last-good snapshot but tag it stale (age > staleMs, default 15 min,
+ * or failed refresh) — fresh data never silently masquerades as fresh when
+ * stale. Failed refreshes retry with bounded exponential backoff (10 s →
+ * retryMaxMs, default 120 s max) and the card exposes the error and the
+ * retry countdown. Outcome→view/scheduling decisions live in the pure
+ * `src/refresh.ts` planner. Auth errors tell the user to run `codex login`;
+ * no OAuth refresh endpoint is invented. Tokens are only ever sent to
+ * chatgpt.com and never logged.
+ *
+ * Configuration is loaded ONCE at startup from a dedicated standard JSON
+ * file, `~/.config/opencode/gpt-usage.json` (see src/config.ts for the
+ * validated keys, bounds and defaults). A missing, unreadable or malformed
+ * file yields exactly the defaults; `tui.json` only registers the plugin.
+ * Endpoint URL, weekly-window selection, fetch timeout, layout/bar widths,
+ * slot order and health thresholds are intentionally internal and not
+ * configurable.
  */
 import type { TuiPlugin, TuiPluginModule, TuiSlotContext } from "@opencode-ai/plugin/tui"
 import type { BoxRenderable } from "@opentui/core"
 import { createSignal } from "solid-js"
-import { homedir } from "node:os"
-import { join } from "node:path"
-import { getAccessCredentials, readCodexAuth } from "./auth"
-import { fetchWhamUsage, parseWhamUsage } from "./wham"
+import { collectUsageOutcome } from "./codex-usage"
+import { loadConfig } from "./config"
+import { createRetryBackoff, planRefresh } from "./refresh"
 import {
   DETAIL_MIN_WIDTH,
   formatAge,
@@ -60,18 +69,15 @@ import {
   secondsUntil,
   staleness,
 } from "./format"
-import type { UsageError, UsageSnapshot, ViewState } from "./types"
+import type { ViewState } from "./types"
 
-const POLL_MS = 120_000
+/** Fixed initial retry delay — not configurable; only the cap is. */
 const RETRY_BASE_MS = 10_000
-const RETRY_MAX_MS = 120_000
-
-/** Card title shown in every state. */
-const CARD_TITLE = "OpenCode GPT Usage"
-
-const AUTH_FILE = join(homedir(), ".codex", "auth.json")
 
 const tui: TuiPlugin = async (api) => {
+  // Read + validate the config file once, before anything else runs. Any
+  // missing/unreadable/malformed file already yielded the defaults.
+  const cfg = await loadConfig()
   const [view, setView] = createSignal<ViewState>({ kind: "loading" })
   const [now, setNow] = createSignal(Date.now())
 
@@ -91,62 +97,33 @@ const tui: TuiPlugin = async (api) => {
   }
 
   let timer: ReturnType<typeof setTimeout> | undefined
-  let backoffMs = RETRY_BASE_MS
   let disposed = false
+
+  // Retry backoff: starts at RETRY_BASE_MS, doubles on each failure up to
+  // cfg.retryMaxMs, resets to base after a successful refresh.
+  const backoff = createRetryBackoff(RETRY_BASE_MS, cfg.retryMaxMs)
 
   const schedule = (ms: number) => {
     if (disposed) return
     timer = setTimeout(() => void refresh(), ms)
   }
 
-  /** Record a failure: keep the last-good snapshot (tagged stale) if we have
-   *  one, otherwise switch to the error state. Retry with bounded backoff. */
-  const fail = (error: Omit<UsageError, "retryAt">, previous?: UsageSnapshot) => {
-    const retryAt = Date.now() + backoffMs
-    if (previous) {
-      setView({ kind: "data", snapshot: { ...previous, refreshError: { ...error, retryAt } } })
-    } else {
-      setView({ kind: "error", error: { ...error, retryAt } })
-    }
-    schedule(backoffMs)
-    backoffMs = Math.min(backoffMs * 2, RETRY_MAX_MS)
-  }
-
   const refresh = async () => {
     const current = view()
     const previous = current.kind === "data" ? current.snapshot : undefined
 
-    const auth = await readCodexAuth(AUTH_FILE)
-    const creds = getAccessCredentials(auth)
-    if (!creds) {
-      fail({ kind: "auth", message: "codex login required — run `codex login`" }, previous)
-      return
-    }
-
-    const res = await fetchWhamUsage({
-      accessToken: creds.accessToken,
-      accountId: creds.accountId,
+    const outcome = await collectUsageOutcome({ credentialsPath: cfg.authFile })
+    const plan = planRefresh({
+      outcome,
+      previous,
+      now: Date.now(),
+      pollMs: cfg.pollMs,
+      backoffDelayMs: backoff.current(),
     })
-    if (!res.ok) {
-      if (res.kind === "auth") {
-        fail({ kind: "auth", message: "auth rejected — run `codex login`" }, previous)
-      } else if (res.kind === "http") {
-        fail({ kind: "http", message: `usage endpoint error (HTTP ${res.status})` }, previous)
-      } else {
-        fail({ kind: "network", message: "network error — retrying" }, previous)
-      }
-      return
-    }
-
-    const weekly = parseWhamUsage(res.data, Date.now())
-    if (!weekly) {
-      fail({ kind: "no-window", message: "no weekly usage window from API" }, previous)
-      return
-    }
-
-    backoffMs = RETRY_BASE_MS
-    setView({ kind: "data", snapshot: { ...weekly, fetchedAt: Date.now() } })
-    schedule(POLL_MS)
+    setView(plan.view)
+    if (plan.backoffReset) backoff.reset()
+    else backoff.advance()
+    schedule(plan.nextDelayMs)
   }
 
   api.lifecycle.onDispose(() => {
@@ -178,7 +155,7 @@ const tui: TuiPlugin = async (api) => {
           return (
             <box border borderColor={theme().border} paddingX={1} width="100%">
               <text fg={theme().textMuted} wrapMode="none" truncate>
-                {`${CARD_TITLE} · loading…`}
+                {`${cfg.cardTitle} · loading…`}
               </text>
             </box>
           )
@@ -191,7 +168,7 @@ const tui: TuiPlugin = async (api) => {
             <box border borderColor={auth ? theme().error : theme().warning} paddingX={1} width="100%">
               <box flexDirection="column" minWidth={0}>
                 <text fg={auth ? theme().error : theme().warning} wrapMode="none" truncate>
-                  {`${CARD_TITLE} · unavailable`}
+                  {`${cfg.cardTitle} · unavailable`}
                 </text>
                 <text fg={theme().text} wrapMode="none" truncate>
                   {err.message}
@@ -204,7 +181,7 @@ const tui: TuiPlugin = async (api) => {
 
         // Data (fresh or stale).
         const snap = state.snapshot
-        const stale = staleness(snap, t) === "stale"
+        const stale = staleness(snap, t, cfg.staleMs) === "stale"
         const retryIn = snap.refreshError ? secondsUntil(snap.refreshError.retryAt, t) : 0
 
         const pctLabel = `${snap.remaining}%`
@@ -226,15 +203,16 @@ const tui: TuiPlugin = async (api) => {
         const staleSuffix = stale
           ? ` · stale ${formatAge(t - snap.fetchedAt)}` + (retryIn > 0 ? ` · retry ${retryIn}s` : "")
           : ""
-        // Wide: muted bullet rows; `resets` is padded to align its
-        // timestamp with `started`. Narrow/stacked: keep only the
-        // actionable footer, leading with the percentage in stacked mode
-        // so truncation always cuts it last.
-        const footer = showDetails
-          ? `● resets  ${reset}${staleSuffix}`
-          : layout.mode === "stacked"
-            ? `${pctLabel} · resets ${reset}${staleSuffix}`
-            : `resets ${reset}${staleSuffix}`
+        // Color hierarchy: fresh quota/period VALUES use normal readable
+        // text; bullets and labels stay muted secondary affordances (via
+        // spans). When stale, everything informational drops to muted so
+        // nothing reads as fresh, and the resets row carries an explicit
+        // warning-colored stale marker. `resets` is padded to align its
+        // timestamp with `started`.
+        const valueColor = stale ? theme().textMuted : theme().text
+        const labelColor = theme().textMuted
+        const resetsLabel = showDetails ? "● resets  " : "resets "
+        const stackedPrefix = !showDetails && layout.mode === "stacked" ? `${pctLabel} · ` : null
 
         return (
           <box border borderColor={stale ? theme().warning : theme().border} paddingX={1} width="100%">
@@ -250,11 +228,12 @@ const tui: TuiPlugin = async (api) => {
               }}
             >
               <text fg={stale ? theme().warning : theme().text} wrapMode="none" truncate>
-                {stale ? `${CARD_TITLE} · stale` : CARD_TITLE}
+                {stale ? `${cfg.cardTitle} · stale` : cfg.cardTitle}
               </text>
               {showDetails && plan ? (
-                <text fg={theme().textMuted} wrapMode="none" truncate>
-                  {`● ${plan}`}
+                <text fg={valueColor} wrapMode="none" truncate>
+                  <span {...{ style: { fg: labelColor } }}>{"● "}</span>
+                  {plan}
                 </text>
               ) : null}
               <box flexDirection="row" gap={1} alignItems="center" minWidth={0}>
@@ -264,12 +243,19 @@ const tui: TuiPlugin = async (api) => {
                 ) : null}
               </box>
               {showDetails && start !== null ? (
-                <text fg={theme().textMuted} wrapMode="none" truncate>
-                  {`● started ${formatResetLocal(start)}`}
+                // marginTop: slight vertical separation between the bar
+                // and the period detail rows — a local nudge only, no
+                // container gap changes.
+                <text fg={valueColor} wrapMode="none" truncate marginTop={1}>
+                  <span {...{ style: { fg: labelColor } }}>{"● started "}</span>
+                  {formatResetLocal(start)}
                 </text>
               ) : null}
-              <text fg={theme().textMuted} wrapMode="none" truncate>
-                {footer}
+              <text fg={valueColor} wrapMode="none" truncate>
+                {stackedPrefix ? <span {...{ style: { fg: valueColor } }}>{stackedPrefix}</span> : null}
+                <span {...{ style: { fg: labelColor } }}>{resetsLabel}</span>
+                {reset}
+                {stale ? <span {...{ style: { fg: theme().warning } }}>{staleSuffix}</span> : null}
               </text>
             </box>
           </box>

@@ -1,19 +1,9 @@
 {
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "target": "ESNext",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "jsx": "preserve",
-    "jsxImportSource": "@opentui/solid",
-    "lib": ["ESNext", "DOM"],
-    "strict": true,
-    "skipLibCheck": true,
-    "esModuleInterop": true,
-    "verbatimModuleSyntax": true,
     "declaration": true,
     "emitDeclarationOnly": true,
-    "outDir": "dist",
-    "types": ["node"]
+    "outDir": "dist"
   },
   "include": ["src"]
 }
