@@ -1,0 +1,46 @@
+# Publishes @zfyao666/opencode-gpt-usage to the npm registry with
+# provenance whenever a GitHub Release is published.
+#
+# Security model: no npm token is stored anywhere. Publishing relies on
+# npm trusted publishing / OIDC — the repository must be configured as a
+# trusted publisher for the package on npmjs.com (publish provenance).
+# `id-token: write` is required for the OIDC token; `contents: read` is
+# all the checkout/job needs. A manual dispatch is intentionally absent so
+# the workflow can never publish code that is not a GitHub Release.
+name: publish to npm
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Typecheck and test
+        run: bun run check
+
+      - name: Build
+        run: bun run build
+
+      - name: Publish with provenance
+        run: npm publish --provenance --access public

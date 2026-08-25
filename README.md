@@ -24,8 +24,41 @@ weekly window from `chatgpt.com/backend-api/wham/usage`:
 
 ## Install
 
-Not published (`"private": true`), so activate it as a local TUI plugin.
-Build first:
+Published on npm as `@zfyao666/opencode-gpt-usage`. The package exposes
+the `./tui` entrypoint, which opencode's TUI plugin loader detects as a
+TUI plugin target.
+
+### From npm (recommended)
+
+Install the package with opencode's own plugin command (verified against
+opencode 1.18.22 — `opencode plugin <module>` with a `-g`/`--global`
+flag):
+
+```sh
+opencode plugin -g @zfyao666/opencode-gpt-usage
+```
+
+This installs the package and registers it in the global TUI config. The
+universal path that works in every case is a direct entry in
+`~/.config/opencode/tui.json` — the package must be installed from npm
+(any npm install location opencode resolves, e.g. via the command above or
+`npm install -g`), and the entry is the package name, not a file path:
+
+```jsonc
+{
+  "plugin": [
+    "...existing plugins...",
+    "@zfyao666/opencode-gpt-usage"
+  ]
+}
+```
+
+After either install, **fully restart opencode** — the card appears in the
+right sidebar of any session. Configuration stays in
+`~/.config/opencode/gpt-usage.json` (see Configuration below); `tui.json`
+only registers the plugin.
+
+### From source (development)
 
 ```sh
 bun install
@@ -33,8 +66,7 @@ bun run build    # emits dist/index.js (self-contained, only opencode-runtime de
 ```
 
 Then register the built file in `~/.config/opencode/tui.json` — a plain
-string entry; `tui.json` only activates the plugin (see Configuration
-below for where the options live):
+string entry pointing at the local `dist/index.js`:
 
 ```jsonc
 {
@@ -57,8 +89,8 @@ that is `/root/.config/opencode/gpt-usage.json`.
 The file is read **once at plugin startup** — edit it and fully restart
 opencode to apply changes. The plugin never writes it.
 
-`tui.json` only registers the plugin (path string above); it carries no
-options.
+`tui.json` only registers the plugin (a local path or npm package-name
+string, see Install); it carries no options.
 
 Full-default template (no tokens — just the five keys at their defaults):
 
@@ -112,7 +144,8 @@ are not even scanned), and that loader requires a `server()` export — a TUI
 module (`{ id, tui }`) is rejected with
 `must default export an object with server()`. Verified empirically against
 opencode 1.18.21: TUI plugin origins come exclusively from the `plugin` array
-of `tui.json`. So the reliable activation is the `tui.json` entry above; a
+of `tui.json` — either a local `dist/index.js` path or an npm package name
+(see Install). So the reliable activation is the `tui.json` entry above; a
 plugins-directory symlink would either be inert (`.tsx`) or log load errors
 (`.js`).
 
@@ -136,6 +169,21 @@ bun run build       # bun build.ts && tsc → dist/
 The logic is split into pure, tested modules (`src/config.ts`,
 `src/codex-usage.ts`, `src/format.ts`); `src/index.tsx` only wires them to
 the TUI slot.
+
+## Releasing
+
+1. **Check and build** locally: `bun run check && bun run build`.
+2. **Inspect what would ship**: `npm pack --dry-run` (tarball must contain
+   only `package.json`, `README.md`, `LICENSE` and `dist/`), then
+   `npm publish --dry-run --access public`.
+3. **First or manual release**: `npm login` (requires your npm account with
+   2FA), bump `version` in `package.json`, then
+   `npm publish --access public`.
+4. **Provenance release**: push a `vX.Y.Z` tag and create a GitHub Release
+   for it. The `.github/workflows/publish.yml` workflow then runs
+   `npm publish --provenance --access public` automatically — no npm token
+   is stored; npm trusted publishing (OIDC) must be configured for this
+   repository on npmjs.com before the first provenance release.
 
 ## License
 

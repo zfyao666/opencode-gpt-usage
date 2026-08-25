@@ -2,10 +2,12 @@
   "name": "@zfyao666/opencode-gpt-usage",
   "version": "0.1.0",
   "description": "ChatGPT (Codex) weekly quota card for the opencode TUI right sidebar — WEEKLY ▓▓▓▓▓▓▓░░░ 70% left · resets 14:30.",
-  "private": true,
   "type": "module",
   "license": "MIT",
   "author": "zhufengyao <527936342@qq.com>",
+  "publishConfig": {
+    "access": "public"
+  },
   "keywords": [
     "opencode",
     "tui",
