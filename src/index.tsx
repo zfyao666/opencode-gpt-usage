@@ -276,10 +276,9 @@ const tui: TuiPlugin = async (api) => {
                       ) : null}
                     </box>
                     {showDetails && start !== null ? (
-                      // marginTop (first window only): slight separation
-                      // between the bar and the period detail rows — a
-                      // local nudge only, no container gap changes.
-                      <text fg={valueColor} wrapMode="none" truncate marginTop={i === 0 ? 1 : 0}>
+                      // No marginTop: every window's started row uses the
+                      // same spacing so both blocks read identically.
+                      <text fg={valueColor} wrapMode="none" truncate>
                         <span {...{ style: { fg: labelColor } }}>{`${indent}● started `}</span>
                         {formatResetLocal(start)}
                       </text>
