@@ -24,7 +24,7 @@ weekly window from `chatgpt.com/backend-api/wham/usage`:
 
 ## Install
 
-Published on npm as `@zfyao666/opencode-gpt-usage`. The package exposes
+Published on npm as `@bruceyao241/opencode-gpt-usage`. The package exposes
 the `./tui` entrypoint, which opencode's TUI plugin loader detects as a
 TUI plugin target.
 
@@ -35,7 +35,7 @@ opencode 1.18.22 — `opencode plugin <module>` with a `-g`/`--global`
 flag):
 
 ```sh
-opencode plugin -g @zfyao666/opencode-gpt-usage
+opencode plugin -g @bruceyao241/opencode-gpt-usage
 ```
 
 This installs the package and registers it in the global TUI config. The
@@ -48,7 +48,7 @@ universal path that works in every case is a direct entry in
 {
   "plugin": [
     "...existing plugins...",
-    "@zfyao666/opencode-gpt-usage"
+    "@bruceyao241/opencode-gpt-usage"
   ]
 }
 ```

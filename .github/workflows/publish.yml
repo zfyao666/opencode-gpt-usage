@@ -1,4 +1,4 @@
-# Publishes @zfyao666/opencode-gpt-usage to the npm registry with
+# Publishes @bruceyao241/opencode-gpt-usage to the npm registry with
 # provenance whenever a GitHub Release is published.
 #
 # Security model: no npm token is stored anywhere. Publishing relies on

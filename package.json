@@ -1,5 +1,5 @@
 {
-  "name": "@zfyao666/opencode-gpt-usage",
+  "name": "@bruceyao241/opencode-gpt-usage",
   "version": "0.1.0",
   "description": "ChatGPT (Codex) weekly quota card for the opencode TUI right sidebar — WEEKLY ▓▓▓▓▓▓▓░░░ 70% left · resets 14:30.",
   "type": "module",
@@ -20,13 +20,13 @@
     "sidebar",
     "wham"
   ],
-  "homepage": "https://github.com/zfyao666/opencode-gpt-usage",
+  "homepage": "https://github.com/BruceYao241/opencode-gpt-usage",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/zfyao666/opencode-gpt-usage.git"
+    "url": "git+https://github.com/BruceYao241/opencode-gpt-usage.git"
   },
   "bugs": {
-    "url": "https://github.com/zfyao666/opencode-gpt-usage/issues"
+    "url": "https://github.com/BruceYao241/opencode-gpt-usage/issues"
   },
   "engines": {
     "opencode": ">=1.18"
