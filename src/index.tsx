@@ -8,23 +8,34 @@
  * just position).
  *
  *   ┌ OpenCode GPT Usage ─────────┐
- *   │ ● ChatGPT Plus                 │
- *   │ 5h ▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░ 70%     │
- *   │    ● resets  2026-08-26 07:20  │
- *   │ 7d ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░ 85%     │
- *   │    ● started 2026-08-21 02:20  │
- *   │    ● resets  2026-08-28 02:20  │
+ *   │ OpenCode GPT Usage        Plus │
+ *   │                                │
+ *   │ 5-hour                         │
+ *   │ ▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░ 70% left     │
+ *   │ reset in 32m · 07:20            │
+ *   │                                │
+ *   │ 7-day                          │
+ *   │ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░ 85% left     │
+ *   │ reset in 6d 12h · 08-28 02:20   │
  *   └───────────────────────────────┘
  *
- * One bar per usage window in the snapshot (5h and/or weekly), each with
- * its own compact kind label, remaining %, health color and reset time.
- * With a single window the label still names the period. Detail rows
- * (plan / started / bulleted resets) appear only when the measured
- * content width fits them (DETAIL_MIN_WIDTH); narrower cards keep just
- * the actionable reset footer so the percentage is never crowded out.
- * The started row exists only when the API reported a real window
- * duration — a position-fallback window has no honest start and renders
- * nothing.
+ * One bar per usage window in the snapshot (5-hour and/or weekly), each
+ * with its own kind label on the row above the bar, remaining %
+ * ("N% left"), health color and reset time. Bars are the classic
+ * shading pair — medium-shade `▓` for the remaining share, light-shade
+ * `░` for the track — rendered in the window's health color (muted
+ * when stale). With a single window the label still names the period. The plan type
+ * rides in the header row's upper-right corner as a short muted tag
+ * ("Plus") — never wrapping, simply omitted when the snapshot reported
+ * no plan. Every window ends in the same reset-centric footer line — a
+ * countdown, then the concrete reset timestamp, with no bullet glyph
+ * and no started row: the 5-hour window keeps a bare clock time
+ * ("reset in 32m · 07:20") since it always resets within hours, while
+ * the 7-day window keeps month-day but never the year
+ * ("reset in 6d 12h · 08-28 02:20"). Narrow cards (below
+ * DETAIL_MIN_WIDTH) keep just this actionable footer — when the bar has
+ * to stack on its own row there, the percentage moves onto the footer
+ * so it is never crowded out.
  *
  * The bar adapts to the real sidebar width: the slot API exposes no
  * width, so the card measures its own content box (a `BoxRenderable`
@@ -68,10 +79,8 @@ import {
   DETAIL_MIN_WIDTH,
   formatAge,
   formatBar,
-  formatResetLocal,
   friendlyPlanName,
   layoutBar,
-  periodStart,
   secondsUntil,
   staleness,
 } from "./format"
@@ -81,12 +90,58 @@ import type { ViewState } from "./types"
 const RETRY_BASE_MS = 10_000
 
 /**
- * Compact per-window bar labels: "5h" / "7d". Short English tags match
- * the existing UI language and stay readable in narrow sidebars; unknown
- * kinds fall back to their raw name so nothing renders unlabeled.
+ * Per-window quota labels rendered on the row ABOVE each bar: "5-hour" /
+ * "7-day". Unknown kinds fall back to their raw name so nothing renders
+ * unlabeled.
  */
-const WINDOW_KIND_LABELS: Record<string, string> = { "five-hour": "5h", weekly: "7d" }
+const WINDOW_KIND_LABELS: Record<string, string> = { "five-hour": "5-hour", weekly: "7-day" }
 const windowLabel = (kind: string): string => WINDOW_KIND_LABELS[kind] ?? kind
+
+const pad2 = (n: number): string => String(n).padStart(2, "0")
+
+/**
+ * Local clock time only — "HH:mm" (24h), e.g. "03:52". Paired with the
+ * "reset in Nm" countdown on the 5-hour window, where the window always
+ * resets within hours and the full date adds nothing. "" when the
+ * timestamp is invalid.
+ */
+const formatClockLocal = (epochMs: number): string => {
+  const d = new Date(epochMs)
+  if (Number.isNaN(d.getTime())) return ""
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+}
+
+/**
+ * Local reset timestamp without the year — "MM-DD HH:mm" (24h), e.g.
+ * "08-28 02:20". Used on the 7-day window, where the reset is days away
+ * so a bare clock time is ambiguous, but the year is always implied by
+ * the countdown beside it. Built field-by-field so it is locale-stable
+ * and reads the same in every environment. "" when invalid.
+ */
+const formatResetLocalShort = (epochMs: number): string => {
+  const d = new Date(epochMs)
+  if (Number.isNaN(d.getTime())) return ""
+  return (
+    `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ` +
+    `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+  )
+}
+
+/**
+ * Compact countdown for the reset rows: "32m", "2h 5m", "6d 12h".
+ * formatAge tops out at hours, which would render the weekly window as
+ * "150h" — this adds a days tier. Minimum 1m so a just-about-to-reset
+ * window never reads "0m".
+ */
+const formatCountdown = (ms: number): string => {
+  const minutes = Math.max(1, Math.round(ms / 60_000))
+  const days = Math.floor(minutes / (60 * 24))
+  const hours = Math.floor((minutes % (60 * 24)) / 60)
+  const mins = minutes % 60
+  if (days > 0) return hours > 0 ? `${days}d ${hours}h` : `${days}d`
+  if (hours > 0) return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`
+  return `${mins}m`
+}
 
 const tui: TuiPlugin = async (api) => {
   // Read + validate the config file once, before anything else runs. Any
@@ -198,36 +253,42 @@ const tui: TuiPlugin = async (api) => {
         const stale = staleness(snap, t, cfg.staleMs) === "stale"
         const retryIn = snap.refreshError ? secondsUntil(snap.refreshError.retryAt, t) : 0
 
+        // Short plan tag for the header row's upper-right corner: "Plus",
+        // "Pro", … (friendlyPlanName yields "ChatGPT Plus"; the card
+        // title already carries the product context). null when the
+        // snapshot reported no usable plan_type — the tag is then simply
+        // omitted and the title keeps the full row.
         const plan = friendlyPlanName(snap.planType)
-        // Detail bullet rows (plan / started / bulleted resets) only when
-        // the measured width fits them; narrower cards stay lean.
+        const planTag = plan?.replace(/^ChatGPT\s+/, "") || null
+        // Narrow cards (below DETAIL_MIN_WIDTH) stay lean: when the bar
+        // has to stack on its own full row there, the percentage moves
+        // onto the reset footer instead of crowding the bar row.
         const showDetails = measuredWidth >= DETAIL_MIN_WIDTH
 
         const windows = snap.windows
-        const maxLabel = windows.reduce((n, w) => Math.max(n, windowLabel(w.kind).length), 0)
-        const labelCells = maxLabel + 1 // kind label + the flex gap before the bar
-        const widestPct = windows.reduce((n, w) => Math.max(n, `${w.remaining}%`.length), 0)
+        const widestPct = windows.reduce((n, w) => Math.max(n, `${w.remaining}% left`.length), 0)
         // One SHARED layout for every bar: the widest pct label decides
-        // inline/stacked and the kind-label column is reserved up front
-        // (layoutBar only reads pctLabel.length, hence the placeholder),
-        // so all bars get the same width and the rows stay aligned.
-        const layout = layoutBar(measuredWidth - labelCells, "0".repeat(widestPct))
+        // inline/stacked (layoutBar only reads pctLabel.length, hence the
+        // placeholder), so all bars get the same width and the rows stay
+        // aligned. Kind labels sit on their own rows ABOVE the bars, so
+        // each bar can claim the full measured width.
+        const layout = layoutBar(measuredWidth, "0".repeat(widestPct))
         const staleSuffix = stale
           ? ` · stale ${formatAge(t - snap.fetchedAt)}` + (retryIn > 0 ? ` · retry ${retryIn}s` : "")
           : ""
         // Color hierarchy: fresh quota/period VALUES use normal readable
-        // text; bullets and labels stay muted secondary affordances (via
-        // spans). When stale, everything informational drops to muted so
-        // nothing reads as fresh, and the LAST resets row carries the
-        // explicit warning-colored stale marker. Each window gets its own
-        // health color from its own remaining; `resets` is padded to
-        // align its timestamp with `started`.
+        // text — including the "5-hour"/"7-day" kind labels above the
+        // bars, which are primary content, not secondary chrome. Only
+        // the header's plan tag, separators and the reset-row
+        // "reset in"/" · " affordances stay muted (via spans). When
+        // stale, everything informational drops
+        // to muted so nothing reads as fresh, and the LAST window's
+        // reset row carries the explicit warning-colored stale marker.
+        // Each window gets its own health color from its own remaining.
         const valueColor = stale ? theme().textMuted : theme().text
         const labelColor = theme().textMuted
         const healthColor = (remaining: number) =>
           remaining >= 50 ? theme().success : remaining >= 15 ? theme().warning : theme().error
-        // Indent detail rows so the bullets sit directly under the bar.
-        const indent = " ".repeat(labelCells)
 
         return (
           <box border borderColor={stale ? theme().warning : theme().border} paddingX={1} width="100%">
@@ -242,55 +303,78 @@ const tui: TuiPlugin = async (api) => {
                 contentRef = el
               }}
             >
-              <text fg={stale ? theme().warning : theme().text} wrapMode="none" truncate>
-                {stale ? `${cfg.cardTitle} · stale` : cfg.cardTitle}
-              </text>
-              {showDetails && plan ? (
-                <text fg={valueColor} wrapMode="none" truncate>
-                  <span {...{ style: { fg: labelColor } }}>{"● "}</span>
-                  {plan}
+              {/* Header row: title on the left, plan tag pinned to the
+                  upper-right. The title shrinks and truncates first; the
+                  tag never wraps or is squeezed, and when it is absent
+                  the title simply keeps the full row. */}
+              <box flexDirection="row" justifyContent="space-between" minWidth={0}>
+                <text
+                  fg={stale ? theme().warning : theme().text}
+                  wrapMode="none"
+                  truncate
+                  flexShrink={1}
+                  minWidth={0}
+                >
+                  {stale ? `${cfg.cardTitle} · stale` : cfg.cardTitle}
                 </text>
-              ) : null}
+                {planTag ? (
+                  <text fg={labelColor} wrapMode="none" flexShrink={0}>
+                    {planTag}
+                  </text>
+                ) : null}
+              </box>
               {windows.map((w, i) => {
-                const label = windowLabel(w.kind).padEnd(maxLabel)
-                const pctLabel = `${w.remaining}%`
+                const label = windowLabel(w.kind)
+                const pctLabel = `${w.remaining}% left`
+                // Original bar style: one string — medium-shade `▓` for
+                // the remaining share, light-shade `░` for the track —
+                // in this window's health color (muted when stale, so a
+                // stale bar never reads as a fresh health signal).
                 const bar = formatBar(w.remaining, layout.barWidth)
                 const barColor = stale ? theme().textMuted : healthColor(w.remaining)
-                const start = periodStart(w.resetsAt, w.limitWindowSeconds)
+                // Both windows use the SAME reset-centric line — a
+                // countdown, then the concrete reset timestamp, with no
+                // bullet glyph and no started row. The 5-hour window
+                // always resets within hours, so a bare clock time
+                // suffices ("reset in 32m · 07:20"); the 7-day window
+                // spans days, so its timestamp keeps month-day but never
+                // the year ("reset in 6d 12h · 08-28 02:20").
+                const isFiveHour = w.kind === "five-hour"
+                const resetWhen = isFiveHour
+                  ? formatClockLocal(w.resetsAt)
+                  : formatResetLocalShort(w.resetsAt)
                 // Stacked (narrow) bars keep the bar on its own full row
                 // and move the percentage onto the reset footer.
                 const stackedPrefix =
                   !showDetails && layout.mode === "stacked" ? `${pctLabel} · ` : null
-                const resetsLabel = showDetails ? `${indent}● resets  ` : "resets "
                 return (
-                  // Module-level rhythm: no blank row between the
-                  // title/plan header and the FIRST window block; each
-                  // FOLLOW-UP block gets one full blank row above it so
-                  // consecutive modules stay clearly separated.
-                  <box flexDirection="column" minWidth={0} marginTop={i > 0 ? 1 : 0}>
+                  // Module-level rhythm: exactly ONE full blank row
+                  // between the title/plan header and the FIRST window
+                  // block, and one full blank row above each FOLLOW-UP
+                  // block so consecutive modules stay clearly separated.
+                  <box flexDirection="column" minWidth={0} marginTop={1}>
+                    {/* Kind label is primary content: normal text color
+                        (valueColor), dropping to muted only when stale —
+                        same treatment as the percentage. */}
+                    <text fg={valueColor} wrapMode="none" truncate>
+                      {label}
+                    </text>
                     <box flexDirection="row" gap={1} alignItems="center" minWidth={0}>
-                      <text fg={labelColor} wrapMode="none">
-                        {label}
+                      <text fg={barColor} wrapMode="none">
+                        {bar}
                       </text>
-                      <text fg={barColor}>{bar}</text>
                       {layout.mode === "inline" ? (
                         <text fg={stale ? theme().textMuted : theme().text}>{pctLabel}</text>
                       ) : null}
                     </box>
-                    {showDetails && start !== null ? (
-                      // No marginTop: every window's started row uses the
-                      // same spacing so both blocks read identically.
-                      <text fg={valueColor} wrapMode="none" truncate>
-                        <span {...{ style: { fg: labelColor } }}>{`${indent}● started `}</span>
-                        {formatResetLocal(start)}
-                      </text>
-                    ) : null}
                     <text fg={valueColor} wrapMode="none" truncate>
                       {stackedPrefix ? (
                         <span {...{ style: { fg: valueColor } }}>{stackedPrefix}</span>
                       ) : null}
-                      <span {...{ style: { fg: labelColor } }}>{resetsLabel}</span>
-                      {formatResetLocal(w.resetsAt)}
+                      <span {...{ style: { fg: labelColor } }}>{"reset in "}</span>
+                      {formatCountdown(w.resetsAt - t)}
+                      <span {...{ style: { fg: labelColor } }}>{" · "}</span>
+                      {resetWhen}
                       {stale && i === windows.length - 1 ? (
                         <span {...{ style: { fg: theme().warning } }}>{staleSuffix}</span>
                       ) : null}
