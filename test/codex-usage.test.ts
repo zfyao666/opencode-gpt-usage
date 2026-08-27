@@ -191,6 +191,108 @@ describe("collectUsageOutcome — credentials", () => {
   })
 })
 
+describe("collectUsageOutcome — OpenCode OAuth credentials", () => {
+  let dir: string
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "gpt-usage-opencode-"))
+  })
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  const credsPath = () => join(dir, "auth.json")
+
+  test("valid OpenCode OAuth maps access → Bearer token and accountId → account header", async () => {
+    await writeFile(
+      credsPath(),
+      JSON.stringify({ openai: { type: "oauth", access: SECRET, accountId: "oc-7" } }),
+    )
+    const { fetchImpl, calls } = captureFetch(() =>
+      okJson({ rate_limit: { primary_window: weeklyReport() } }),
+    )
+    const outcome = await collectUsageOutcome({ credentialsPath: credsPath(), fetchImpl })
+    expect(outcome.state).toBe("available")
+    expect(calls).toHaveLength(1)
+    expect(calls[0].url).toBe(USAGE_ENDPOINT_URL) // endpoint unchanged for OpenCode creds
+    const headers = calls[0].init?.headers as Record<string, string>
+    expect(headers.authorization).toBe(`Bearer ${SECRET}`)
+    expect(headers["chatgpt-account-id"]).toBe("oc-7")
+  })
+
+  test("OpenCode OAuth without accountId (or with a non-string one) sends no account header", async () => {
+    await writeFile(credsPath(), JSON.stringify({ openai: { type: "oauth", access: SECRET } }))
+    const { fetchImpl: fetchNoAccount, calls: callsNoAccount } = captureFetch(() =>
+      okJson({ rate_limit: { primary_window: weeklyReport() } }),
+    )
+    expect(
+      (await collectUsageOutcome({ credentialsPath: credsPath(), fetchImpl: fetchNoAccount })).state,
+    ).toBe("available")
+    expect((callsNoAccount[0].init?.headers as Record<string, string>)["chatgpt-account-id"]).toBeUndefined()
+
+    // A non-string accountId is treated as absent, not as a credential failure.
+    await writeFile(
+      credsPath(),
+      JSON.stringify({ openai: { type: "oauth", access: SECRET, accountId: 7 } }),
+    )
+    const { fetchImpl: fetchBadAccount, calls: callsBadAccount } = captureFetch(() =>
+      okJson({ rate_limit: { primary_window: weeklyReport() } }),
+    )
+    expect(
+      (await collectUsageOutcome({ credentialsPath: credsPath(), fetchImpl: fetchBadAccount })).state,
+    ).toBe("available")
+    expect((callsBadAccount[0].init?.headers as Record<string, string>)["chatgpt-account-id"]).toBeUndefined()
+  })
+
+  test("API-key / non-OAuth / malformed OpenCode shapes → login-required, no request issued", async () => {
+    let called = 0
+    const fetchImpl = (async () => {
+      called += 1
+      return new Response("{}", { status: 200 })
+    }) as unknown as typeof fetch
+
+    const rejected: unknown[] = [
+      // API-key shape: openai present but type is "api" — never a credential.
+      { openai: { type: "api", key: "sk-proj-123" } },
+      // OAuth with missing or empty access.
+      { openai: { type: "oauth" } },
+      { openai: { type: "oauth", access: "" } },
+      // openai absent, non-object, or not oauth-typed.
+      {},
+      { openai: "oauth" },
+      { openai: 42 },
+      { openai: { type: "custom", access: SECRET } },
+    ]
+    for (const doc of rejected) {
+      await writeFile(credsPath(), JSON.stringify(doc))
+      expect(await collectUsageOutcome({ credentialsPath: credsPath(), fetchImpl })).toEqual({
+        state: "login-required",
+      })
+    }
+    expect(called).toBe(0)
+  })
+
+  test("regression: the Codex credential shape resolves exactly as before", async () => {
+    await writeFile(
+      credsPath(),
+      JSON.stringify({ tokens: { access_token: SECRET, account_id: "acc-42" } }),
+    )
+    const { fetchImpl, calls } = captureFetch(() =>
+      okJson({ rate_limit: { primary_window: weeklyReport() } }),
+    )
+    const outcome = await collectUsageOutcome({ credentialsPath: credsPath(), fetchImpl })
+    expect(outcome.state).toBe("available")
+    if (outcome.state === "available") {
+      expect(outcome.windows.map((w) => w.kind)).toEqual(["weekly"])
+      expect(outcome.windows[0].remaining).toBe(35)
+    }
+    const headers = calls[0].init?.headers as Record<string, string>
+    expect(headers.authorization).toBe(`Bearer ${SECRET}`)
+    expect(headers["chatgpt-account-id"]).toBe("acc-42")
+  })
+})
+
 describe("collectUsageOutcome — request shape", () => {
   let dir: string
 

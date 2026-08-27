@@ -1,6 +1,6 @@
 {
   "name": "@bruceyao241/opencode-gpt-usage",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "ChatGPT (Codex) weekly quota card for the opencode TUI right sidebar — WEEKLY ▓▓▓▓▓▓▓░░░ 70% left · resets 14:30.",
   "type": "module",
   "license": "MIT",

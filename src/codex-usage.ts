@@ -12,7 +12,10 @@
  * ever see outcome states. Raw `Error` objects and raw error text never
  * cross the boundary (a transport failure collapses to the "network"
  * state). The bearer token appears only in the outgoing Authorization
- * header and in no returned value.
+ * header and in no returned value. The credential reader auto-detects
+ * two auth-file shapes — the Codex CLI `tokens.access_token` layout and
+ * the OpenCode `openai.type: "oauth"` layout — without exposing which
+ * one supplied the credential.
  *
  * Window reduction (`reduceUsageWindows`) selects, in a single pass over
  * the two rate-limit slots, the best window of each kind: a five-hour
@@ -115,11 +118,25 @@ type Credentials = {
 }
 
 /**
- * Read + extract credentials from the Codex CLI auth file. Any failure —
- * missing/unreadable file, malformed JSON, non-object document, missing or
- * empty `access_token` — yields null. Only a nonempty `access_token` is
- * required: the `id_token` has an independent lifetime and the usage
- * endpoint does not consume it, so no expiry gating is applied.
+ * Read + extract credentials from the configured auth file, auto-detecting
+ * two shapes:
+ *
+ *  (A) Codex CLI — `tokens.access_token` (required nonempty) plus the
+ *      optional `tokens.account_id`. Unchanged legacy behavior.
+ *
+ *  (B) OpenCode — an `openai` entry with `type: "oauth"` carries the
+ *      credential: `openai.access` (required nonempty) maps to the token
+ *      and the optional `openai.accountId` maps to the account id.
+ *      Anything else under `openai` — `type: "api"` (API-key shape),
+ *      absent, non-object, or oauth with a missing/empty `access` — is
+ *      not a usable credential.
+ *
+ * Codex wins when both shapes are present, so existing files behave
+ * exactly as before. Any failure — missing/unreadable file, malformed
+ * JSON, non-object document, or no recognizable credential pair — yields
+ * null. Only a nonempty access token is required: the `id_token` has an
+ * independent lifetime and the usage endpoint does not consume it, so no
+ * expiry gating is applied.
  */
 async function readCredentials(path: string): Promise<Credentials | null> {
   let text: string
@@ -129,14 +146,33 @@ async function readCredentials(path: string): Promise<Credentials | null> {
     return null
   }
   const document = recordOf(parseJson(text))
-  const tokens = recordOf(document?.tokens)
+  if (!document) return null
+
+  // (A) Codex CLI shape — first, unchanged.
+  const tokens = recordOf(document.tokens)
   const token = tokens?.access_token
-  if (typeof token !== "string" || token.length === 0) return null
-  const account = tokens?.account_id
-  return {
-    token,
-    account: typeof account === "string" && account.length > 0 ? account : undefined,
+  if (typeof token === "string" && token.length > 0) {
+    const account = tokens?.account_id
+    return {
+      token,
+      account: typeof account === "string" && account.length > 0 ? account : undefined,
+    }
   }
+
+  // (B) OpenCode shape — only a `type: "oauth"` entry is a credential.
+  const openai = recordOf(document.openai)
+  if (openai?.type === "oauth") {
+    const access = openai.access
+    if (typeof access === "string" && access.length > 0) {
+      const account = openai.accountId
+      return {
+        token: access,
+        account: typeof account === "string" && account.length > 0 ? account : undefined,
+      }
+    }
+  }
+
+  return null
 }
 
 // ---------------------------------------------------------------------------
