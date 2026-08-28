@@ -1,8 +1,9 @@
 # opencode-gpt-usage
 
 ChatGPT (Codex) weekly quota card for the opencode TUI right sidebar
-(`sidebar_content` slot). Reads `~/.codex/auth.json` and shows the ~7-day
-weekly window from `chatgpt.com/backend-api/wham/usage`:
+(`sidebar_content` slot). Reads OpenCode's default auth file
+(`~/.local/share/opencode/auth.json`) and shows quota windows from
+`chatgpt.com/backend-api/wham/usage`:
 
 ```
 ┌ WEEKLY ──────────┐
@@ -99,7 +100,7 @@ Full-default template (no tokens — just the five keys at their defaults):
   "pollMs": 120000,
   "staleMs": 900000,
   "retryMaxMs": 120000,
-  "authFile": "/root/.codex/auth.json",
+  "authFile": "/root/.local/share/opencode/auth.json",
   "cardTitle": "OpenCode GPT Usage"
 }
 ```
@@ -117,7 +118,7 @@ exactly the defaults below.
 | `pollMs`     | `120000` (2 min)              | `5000` – `3600000` (5 s – 1 h)  | ms between automatic usage refreshes      |
 | `staleMs`    | `900000` (15 min)             | `60000` – `86400000` (1 min – 1 d) | ms after which data is shown as stale   |
 | `retryMaxMs` | `120000` (2 min)              | `10000` – `3600000` (10 s – 1 h) | cap for the exponential retry backoff    |
-| `authFile`   | `~/.codex/auth.json`          | absolute path, ≤ 4096 chars     | Codex credentials file to read            |
+| `authFile`   | `~/.local/share/opencode/auth.json` | absolute path, ≤ 4096 chars | OpenCode or Codex credentials file to read |
 | `cardTitle`  | `"OpenCode GPT Usage"`        | 1–40 chars (trimmed)            | card title shown in every state           |
 
 Example with overrides:
@@ -127,7 +128,7 @@ Example with overrides:
   "pollMs": 60000,
   "staleMs": 300000,
   "retryMaxMs": 300000,
-  "authFile": "/home/you/.codex/auth.json",
+  "authFile": "/home/you/.local/share/opencode/auth.json",
   "cardTitle": "My GPT Quota"
 }
 ```
@@ -151,11 +152,12 @@ plugins-directory symlink would either be inert (`.tsx`) or log load errors
 
 ## Usage
 
-Requires a Codex CLI login (`codex login`), which writes
-`~/.codex/auth.json` (override the path via the `authFile` key in
-`gpt-usage.json`). If the credentials are missing or rejected, the card
-shows `WEEKLY · unavailable` with `run codex login` and keeps retrying with
-backoff. No config file needed; nothing is written by the plugin.
+Uses OpenCode's OAuth credentials by default from
+`~/.local/share/opencode/auth.json` (`$XDG_DATA_HOME` is honored). Codex CLI
+credentials remain supported by overriding `authFile` with
+`~/.codex/auth.json`. If credentials are missing or rejected, the card shows
+`WEEKLY · unavailable` and keeps retrying with backoff. No config file is
+needed; nothing is written by the plugin.
 
 ## Develop
 

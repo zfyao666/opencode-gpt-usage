@@ -24,7 +24,7 @@ export type GptUsageOptions = {
   staleMs?: unknown
   /** upper bound for the exponential retry backoff in ms (default 120 000). */
   retryMaxMs?: unknown
-  /** absolute path to the Codex credentials file. */
+  /** absolute path to the OpenCode or Codex credentials file. */
   authFile?: unknown
   /** card title shown in every state (default "OpenCode GPT Usage"). */
   cardTitle?: unknown
@@ -44,8 +44,15 @@ export const DEFAULTS: GptUsageConfig = {
   pollMs: 120_000,
   staleMs: 15 * 60 * 1000,
   retryMaxMs: 120_000,
-  authFile: join(homedir(), ".codex", "auth.json"),
+  authFile: defaultOpenCodeAuthPath(),
   cardTitle: "OpenCode GPT Usage",
+}
+
+/** OpenCode's auth store: `$XDG_DATA_HOME/opencode/auth.json`, or the Linux default. */
+function defaultOpenCodeAuthPath(): string {
+  const xdg = process.env.XDG_DATA_HOME
+  const base = xdg && xdg.trim() ? xdg.trim() : join(homedir(), ".local", "share")
+  return join(base, "opencode", "auth.json")
 }
 
 /**

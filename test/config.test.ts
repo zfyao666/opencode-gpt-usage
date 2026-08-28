@@ -4,7 +4,11 @@ import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { CONFIG_FILE_NAME, DEFAULTS, defaultConfigPath, loadConfig, parseOptions } from "../src/config"
 
-const DEFAULT_AUTH_FILE = join(homedir(), ".codex", "auth.json")
+const DEFAULT_AUTH_FILE = join(
+  process.env.XDG_DATA_HOME?.trim() || join(homedir(), ".local", "share"),
+  "opencode",
+  "auth.json",
+)
 
 describe("parseOptions — defaults", () => {
   test("undefined / null / non-object input yields every default", () => {
@@ -17,7 +21,7 @@ describe("parseOptions — defaults", () => {
     expect(parseOptions({})).toEqual(DEFAULTS)
   })
 
-  test("defaults equal the historical hard-coded behavior", () => {
+  test("defaults use OpenCode's auth store", () => {
     expect(DEFAULTS).toEqual({
       pollMs: 120_000,
       staleMs: 15 * 60 * 1000,

@@ -2,8 +2,9 @@
  * opencode-gpt-usage — ChatGPT (Codex) weekly quota card for the opencode
  * TUI right sidebar (`sidebar_content` slot).
  *
- * Reads `~/.codex/auth.json` (`tokens.access_token`, `tokens.account_id`)
- * and asks `chatgpt.com/backend-api/wham/usage` for the quota windows
+ * Reads OpenCode's default auth file (`openai.access`, `openai.accountId`),
+ * with Codex CLI credentials also supported through `authFile`, then asks
+ * `chatgpt.com/backend-api/wham/usage` for the quota windows
  * (5-hour and ~7-day weekly, selected by `limit_window_seconds`, never
  * just position).
  *
